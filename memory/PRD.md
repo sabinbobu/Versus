@@ -36,3 +36,23 @@ phones after joining via QR/room code. Questions AI-generated live on any topic.
 - P2: Replace alert() with toast component on host; skip-question toast UX.
 - P2: Opt into React Router v7 future flags to silence console warnings.
 - P2: Persist running-game state to Mongo for full server-restart resilience (currently in-memory).
+
+## Update (2026-06) — Reaction + Memory modes added (TESTED 100%)
+- Game Type selector on Setup: Quiz / Reaction / Memory (topic+language shown for Quiz only;
+  time-per-round hidden for Memory; difficulty drives Memory grid size).
+- REACTION (whack-a-mole): server lights a random shape among 4 after a random delay; tap it fast.
+  False start (tap before light) or wrong shape = 0. Points 500-1000 by reaction speed from light-on.
+  Generated locally (no LLM). Sudden-death for non-quiz games = instant reaction round.
+- MEMORY (flip-and-match): server deals a shared shuffled deck (easy=4/medium=6/hard=8 pairs);
+  played on the phone (MemoryBoard). Completion time measured server-side; mistakes reduce points (-25 each).
+  Non-finishers score 0. Generated locally (no LLM).
+- Both reuse PREVIEW/ACTIVE/REVEAL/LEADERBOARD/Podium, streaks, team averaging, tiebreaker.
+- Backend: game_engine.py score_question dispatch by type; _active_reaction light timing; submit_memory;
+  serialize reaction target/reaction_live + memory deck. server.py: game_type + POST /rooms/{code}/memory + WS 'memory'.
+- Tests: /app/backend/tests/test_new_modes.py (8/8). Frontend Reaction & Memory E2E reach podium.
+
+## Backlog / Next (updated)
+- P1: Sound effects (tick/sting/fanfare) — still deferred.
+- P2: Optional cost-saver for Quiz (cache pack / cheaper model like gpt-5.4-mini).
+- P2: Skip currently voids the round (0 pts) by design — consider skip-to-reveal to preserve answers.
+- P2: Router v7 future flags to silence console warnings; replace alert() with toast.
