@@ -1,0 +1,35 @@
+{
+  "summary": "Retest confirmed the WebSocket-reconnect / empty-side-overlay fix. Full two-context E2E now reaches the podium reliably. Ran two independent 5-question games (Space, Movies) in three separate browser contexts (host 1920x1080, player A 390x844, player B 390x844). Both games completed to the podium in ~60s with rematch-btn and new-game-btn visible and NO empty-side-overlay at any point. Verified: host-question and host-option-0..3 visible on host during ACTIVE; player shows ONLY the 4 answer-btn shapes with no question text; tap yields answer-locked; pause-btn -> PAUSED label + resume-btn appears; resume-btn -> pause-btn returns; player B reload triggered WS reconnect via localStorage-persisted token and game continued without any empty-side overlay; skip-btn during ACTIVE advances past the current question (jumps to next preview, bypassing reveal by design per game_engine.py _run); rematch-btn returned host to a fresh lobby with new questions ready in ~10s. Backend regression suite from iteration_1 (18/18) untouched and still applicable.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_quick.xml",
+    "/app/test_reports/pytest/pytest_middle.xml",
+    "/app/test_reports/pytest/pytest_long.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "useRoomState.js reconnect loop is correct: WS.onclose starts polling AND schedules a bounded-backoff reconnect (attempts * 1s capped at 5s), polling stops as soon as a WS message arrives (stopPoll in onmessage). Clean.",
+    "Engine.heartbeat + _mark_connected auto-resume: when a polled state request with ?token= comes in, the player is flipped to connected=True and, if that refills a previously empty side, room.empty_side is cleared and room.auto_paused is unset. This closes the original freeze root cause. Good.",
+    "Nit: skip-btn during ACTIVE skips reveal AND leaderboard for that question (game_engine.py _run: on 'skip' res it continues the outer loop). This matches the spec ('advances past the current question') but means players never see the correct answer for a skipped question -- acceptable but worth surfacing to the host as UX (e.g., a toast 'question skipped'). Not a bug.",
+    "Nit: Console warnings from React Router future flags (v7_startTransition, v7_relativeSplatPath) on every navigation. Harmless but noisy. Consider opting in via router config.",
+    "Nit: HostRoom.jsx alert(e.response.data.detail) inside cmd() catch is fine for MVP but a toast component would be nicer.",
+    "PlayerRoom.jsx useEffect dep [state?.current_index, state?.phase === 'preview'] uses a boolean-expression dep -- non-idiomatic but functional. Consider [state?.current_index] alone."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (18/18 pytest from iteration_1, unchanged)", "frontend": "100% - full E2E to podium x2, rematch, pause/resume/skip, WS reconnect, player-view isolation all verified"},
+  "test_credentials": "None (no auth).",
+  "seed_data_creation": "Ephemeral rooms only (POST /api/rooms per test). Codes used: FKF3U, D7JQ9.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "The empty-side-overlay freeze bug is fully resolved. useRoomState.js now reconnects the WebSocket (bounded backoff up to 5s) and keeps a polling heartbeat active until WS messages resume; server-side Engine.heartbeat auto-clears empty_side and auto_paused when a polled /api/rooms/{code}/state with ?token= arrives. If regressing this in the future, run the same 5-question two-context Playwright flow and (a) reload one player mid-game -- host must NOT show empty-side-overlay and game must reach podium-winner, (b) verify rematch-btn returns to a lobby with re-generated questions in ~10s. LLM generation of 5 easy questions takes ~3-10s in this env.",
+  "rca of the issue": "PREVIOUS BUG (iteration_1): WS.onclose fell back to polling but never reconnected the socket, and backend disconnect flipped connected=False -> empty_side + paused, which polling never cleared. FIX APPLIED (iteration_2): (frontend) useRoomState.js scheduleReconnect() reopens the WS with bounded backoff on every close; polling stays live as heartbeat and is stopped on the first WS message. (backend) Engine.heartbeat() called from GET /rooms/{code}/state when ?token= is present marks the player connected and, via _mark_connected, clears room.empty_side and room.auto_paused if the side is no longer empty. Verified fix: two full games reached podium without any empty-side-overlay, and a mid-game player reload restored connectivity within ~1s."
+}

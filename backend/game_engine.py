@@ -56,6 +56,7 @@ class Room:
         self.paused = False
         self.active_start_ms = 0
         self.empty_side = None
+        self.auto_paused = False
         self.winner = None
         self.tiebreaker = None
         self.sudden_death_winner = None
@@ -310,10 +311,33 @@ class Engine:
     async def connect(self, room, ws, role, token):
         room.connections[ws] = {"role": role, "token": token}
         if role == "player" and token in room.all_players():
-            room.all_players()[token]["connected"] = True
-            room.empty_side = self._check_empty(room)
+            self._mark_connected(room, token)
         await self.send_state(ws, room)
         await self.broadcast(room)
+
+    def _mark_connected(self, room, token):
+        """Mark a player online and auto-resume if the previously-empty side is back."""
+        p = room.all_players().get(token)
+        changed = False
+        if p and not p["connected"]:
+            p["connected"] = True
+            changed = True
+        if room.empty_side:
+            e = self._check_empty(room)
+            if e != room.empty_side:
+                room.empty_side = e
+                changed = True
+            if not e and room.auto_paused:
+                room.paused = False
+                room.auto_paused = False
+                room.phase_ends_at = now_ms() + room.remaining_ms
+                changed = True
+        return changed
+
+    async def heartbeat(self, room, token):
+        """Called on state polls carrying a player token; keeps player alive."""
+        if token and self._mark_connected(room, token):
+            await self.broadcast(room)
 
     async def disconnect(self, room, ws):
         info = room.connections.pop(ws, None)
@@ -327,6 +351,7 @@ class Engine:
                 if empty and not room.empty_side:
                     room.empty_side = empty
                     room.paused = True
+                    room.auto_paused = True
         await self.broadcast(room)
 
     def _check_empty(self, room):
@@ -404,6 +429,7 @@ class Engine:
                 await self.broadcast(room)
                 return
         room.paused = False
+        room.auto_paused = False
         room.phase_ends_at = now_ms() + room.remaining_ms
         await self.broadcast(room)
 

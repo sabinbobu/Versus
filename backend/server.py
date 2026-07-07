@@ -88,6 +88,8 @@ async def get_state(code: str, token: str | None = None):
     room = engine.get(code)
     if not room:
         raise HTTPException(404, "Room not found")
+    if token:
+        await engine.heartbeat(room, token)
     return room.serialize()
 
 

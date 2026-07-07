@@ -12,6 +12,8 @@ export function useRoomState(code, role, token) {
   useEffect(() => {
     if (!code) return;
     let alive = true;
+    let reconnectTimer = null;
+    let attempts = 0;
 
     const startPoll = () => {
       if (pollRef.current) return;
@@ -24,19 +26,22 @@ export function useRoomState(code, role, token) {
       tick();
       pollRef.current = setInterval(tick, 1000);
     };
-
     const stopPoll = () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     };
 
-    let ws;
-    try {
-      ws = new WebSocket(wsUrl(code, role, token));
+    const openWs = () => {
+      if (!alive) return;
+      let ws;
+      try {
+        ws = new WebSocket(wsUrl(code, role, token));
+      } catch {
+        startPoll();
+        scheduleReconnect();
+        return;
+      }
       wsRef.current = ws;
-      ws.onopen = () => { if (alive) setConnected(true); };
+      ws.onopen = () => { if (alive) { attempts = 0; setConnected(true); } };
       ws.onmessage = (e) => {
         gotMsgRef.current = true;
         stopPoll();
@@ -45,19 +50,31 @@ export function useRoomState(code, role, token) {
           if (alive && !data.error) setState(data);
         } catch {}
       };
-      ws.onclose = () => { if (alive) { setConnected(false); startPoll(); } };
+      ws.onclose = () => {
+        if (!alive) return;
+        setConnected(false);
+        startPoll();          // keep state live + act as heartbeat via ?token=
+        scheduleReconnect();  // and try to restore the WebSocket
+      };
       ws.onerror = () => { try { ws.close(); } catch {} };
-    } catch {
-      startPoll();
-    }
+    };
 
+    const scheduleReconnect = () => {
+      if (!alive || reconnectTimer) return;
+      attempts += 1;
+      const delay = Math.min(1000 * attempts, 5000);
+      reconnectTimer = setTimeout(() => { reconnectTimer = null; openWs(); }, delay);
+    };
+
+    openWs();
     const safety = setTimeout(() => { if (!gotMsgRef.current) startPoll(); }, 2500);
 
     return () => {
       alive = false;
       clearTimeout(safety);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       stopPoll();
-      try { ws && ws.close(); } catch {}
+      try { wsRef.current && wsRef.current.close(); } catch {}
     };
   }, [code, role, token]);
 
