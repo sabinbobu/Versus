@@ -1,0 +1,47 @@
+{
+  "summary": "Comprehensive backend + frontend testing of Versus quiz app. All 18 backend tests pass (room creation, question generation via GPT-5.5, join flows including team-name capture and duplicate-suffix, start guards, full game loop reaching podium, answer-once + scoring range 500-1000, pause/resume/skip host controls, and rematch reset). Frontend E2E validated: Landing -> Setup -> Host lobby (QR codes, room code, disabled start), player join on two isolated contexts, localStorage persistence across reload, start-game enabling after both sides ready, phase transitions PREVIEW->ACTIVE (host shows question + 4 options, player shows only 4 answer buttons no text) -> REVEAL (correct option highlighted). Discovered one real-time robustness issue: after any WebSocket close, useRoomState falls back to polling but never reconnects the WS, so the backend keeps the player marked disconnected and the host screen locks up with 'Side X is empty!' overlay mid-game.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Real-time game continuation after transient WebSocket drop",
+        "issue": "useRoomState.js falls back to 1s polling on ws.onclose but never re-opens the WebSocket. Because the backend disconnect handler marks the player as connected=False on WS close and sets room.empty_side + room.paused when all players on a side are disconnected, any transient WS drop (Chrome background-tab throttling, brief network hiccup, ingress idle timeout) leaves the game frozen behind the 'Side X is empty!' overlay even though the player is still polling and fully functional. Reproduced consistently during E2E: player pages that were backgrounded while host completed the game got their WS closed by the browser/proxy; server logs show 'connection closed' for both player tokens mid-game, host state flipped to empty_side='A' and paused=true, and podium was never reached.",
+        "affected_selectors": ["[data-testid=\"empty-side-overlay\"]"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_quick.xml",
+    "/app/test_reports/pytest/pytest_middle.xml",
+    "/app/test_reports/pytest/pytest_long.xml"
+  ],
+  "action_items": [
+    "Fix useRoomState.js to reconnect the WebSocket after ws.onclose (e.g., exponential backoff reconnect while alive) instead of only falling back to polling. Alternatively, extend Engine.disconnect to grace-period the connected=False flag (e.g., only mark side empty after N seconds of no reconnect AND no polling activity) so that a client using the polling fallback keeps the game live.",
+    "Optionally: in backend Engine.resume(), also clear room.paused when empty_side clears via connect(); today connect() clears empty_side but leaves paused=True until host presses Resume."
+  ],
+  "critical_code_review_comments": [
+    "useRoomState.js: WS is never reconnected after close; polling fallback masks the issue on the client but the server still treats the player as offline, breaking the empty_side heuristic. HIGH priority.",
+    "game_engine.py Engine.connect: on player reconnect it sets empty_side=_check_empty(...) which may become None, but paused stays True. The host must click Resume to actually continue -- consider auto-resume when the previously-empty side has a live connection again.",
+    "server.py ws_endpoint: no try/except around receive_json; any malformed message will fall through to the generic except Exception and disconnect the socket. Acceptable but noisy.",
+    "PlayerRoom.jsx useEffect dep [state?.current_index, state?.phase === \"preview\"] uses a computed boolean as a dep; fine but non-obvious.",
+    "question_gen._parse_json fenced-block handling assumes a leading ```json fence; handles ```json but if the model returns ```python or another tag it will strip incorrectly. Minor -- fallback bank always catches it.",
+    "game_engine.py: submit_answer returns False for many distinct failure modes (wrong phase, already answered, invalid choice, no such token) with no way to distinguish -- fine for MVP but consider structured error codes.",
+    "No file/module exceeds 700 lines; DRY is fine; all endpoints use Pydantic; env vars from process.env / os.environ; async used consistently."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {"backend": "100% (18/18 pytest)", "frontend": "~90% - full lobby/join/active/reveal validated; podium finish blocked by WS-reconnect bug"},
+  "test_credentials": "None required (no auth).",
+  "seed_data_creation": "Rooms are created ephemerally per-test via POST /api/rooms; no seed data needed.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend is fully green -- keep /app/backend/tests/backend_test.py as regression suite (runs in ~5 min total). For frontend re-test after fix, re-run the two-context Playwright flow: create room via /api/rooms, open /host/{code} on 1920x1080, open /join/{code}/A and /join/{code}/B in *separate* browser contexts (localStorage otherwise collides), fill player-name-input, click join-submit-btn, wait for start-game-btn to enable, click Start, then run the game to podium-winner. The critical bug to verify fixed: no [data-testid=\"empty-side-overlay\"] should appear mid-game when player tabs are backgrounded or after a transient WS drop, and the host should reach [data-testid=\"podium-winner\"] with [data-testid=\"rematch-btn\"] and [data-testid=\"new-game-btn\"] visible. Backend LLM (gpt-5.5) works reliably; ~15-40s to generate 5 questions.",
+  "rca of the issue": "REPRODUCTION: 1) Create a room; 2) join two players on separate browser contexts; 3) start the game; 4) after Q1 REVEAL, background/switch away from the player tabs (or wait for any transient WS disconnect from the ingress) -- server logs will show 'connection closed' for each player token. 5) Host then shows 'Side A is empty!' overlay and the phase runner freezes because room.paused=True and room.empty_side='A'. ROOT CAUSE: (a) frontend useRoomState.js only starts polling in ws.onclose but never reconnects the WS; (b) backend Engine.disconnect flips player.connected=False and, if all players on that side are now disconnected while status=='playing', sets room.empty_side and room.paused=True. Since the WS never comes back, empty_side/paused never clear on their own. MITIGATION (choose one): (1) In useRoomState.js, on ws.onclose schedule a reconnect (e.g., setTimeout 1s, exponential backoff, cancel on unmount) that creates a fresh WebSocket; keep polling as belt-and-suspenders. (2) In Engine, add a small grace period (e.g., 10s) before marking a side empty after WS close, or treat a recent /api/rooms/{code}/state request bearing the player's token as a heartbeat that resets connected=True. Recommended: fix the frontend reconnect (root cause) AND auto-resume in Engine.connect once empty_side clears."
+}
