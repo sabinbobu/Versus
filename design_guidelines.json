@@ -1,0 +1,103 @@
+{
+  "theme": "dark",
+  "archetype": "7 (Electric & Neon)",
+  "typography": {
+    "heading_font": "Unbounded",
+    "body_font": "Outfit",
+    "hierarchy": {
+      "h1": "text-5xl sm:text-6xl tracking-tighter font-black",
+      "h2": "text-3xl sm:text-4xl tracking-tight font-bold",
+      "h3": "text-xl sm:text-2xl font-semibold",
+      "body": "text-base leading-relaxed",
+      "labels": "text-sm uppercase tracking-[0.2em] font-bold"
+    }
+  },
+  "colors": {
+    "background": {
+      "primary": "#05050A",
+      "secondary": "#0A0A14",
+      "surface": "#121220"
+    },
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#A1A1AA",
+      "inverse": "#000000"
+    },
+    "brand": {
+      "side_a": "#06B6D4",
+      "side_b": "#EC4899",
+      "accent_gradient": "bg-gradient-to-r from-violet-600 to-cyan-400"
+    },
+    "answers": {
+      "option_1": { "color": "#FF3366", "tailwind": "bg-[#FF3366]", "shape": "triangle", "name": "Red Triangle" },
+      "option_2": { "color": "#00E5FF", "tailwind": "bg-[#00E5FF]", "shape": "diamond", "name": "Cyan Diamond" },
+      "option_3": { "color": "#FFD700", "tailwind": "bg-[#FFD700]", "shape": "circle", "name": "Yellow Circle" },
+      "option_4": { "color": "#00FF66", "tailwind": "bg-[#00FF66]", "shape": "square", "name": "Green Square" }
+    }
+  },
+  "layout": {
+    "host_screen": {
+      "container": "w-full max-w-7xl mx-auto p-12 min-h-screen flex flex-col justify-center",
+      "question_text": "text-[4vw] lg:text-[5vw] leading-tight text-center max-w-5xl mx-auto mb-16 font-black font-heading",
+      "answers_grid": "grid grid-cols-2 gap-8 w-full",
+      "answer_card": "h-32 flex items-center justify-start px-8 rounded-2xl text-3xl font-bold border-4 relative overflow-hidden",
+      "timer_bar": "w-full h-4 rounded-full mt-12 bg-white/10 overflow-hidden"
+    },
+    "player_mobile": {
+      "container": "w-full min-h-[100svh] flex flex-col p-4 bg-[#05050A]",
+      "answers_stack": "flex flex-col gap-4 flex-1 justify-center",
+      "answer_button": "w-full h-24 sm:h-32 rounded-2xl flex items-center justify-center active:scale-95 transition-transform shadow-[0_4px_0_rgba(0,0,0,0.5)] active:shadow-[0_0px_0_rgba(0,0,0,0.5)] active:translate-y-1"
+    },
+    "lobby": {
+      "split_screen": "flex w-full h-screen",
+      "side_a": "flex-1 flex flex-col items-center justify-center bg-cyan-950/30 border-r border-cyan-500/30",
+      "side_b": "flex-1 flex flex-col items-center justify-center bg-pink-950/30 border-l border-pink-500/30",
+      "qr_code_container": "bg-white p-4 rounded-2xl mb-8"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-white text-black font-bold uppercase tracking-widest rounded-full px-8 py-4 hover:scale-105 transition-transform",
+      "side_a": "bg-[#06B6D4] text-black hover:bg-cyan-400 font-bold",
+      "side_b": "bg-[#EC4899] text-black hover:bg-pink-400 font-bold"
+    },
+    "surfaces": {
+      "glass": "backdrop-blur-xl bg-white/5 border border-white/10 rounded-3xl",
+      "neon_border": "border border-white/20 shadow-[0_0_15px_rgba(255,255,255,0.1)]"
+    }
+  },
+  "motion": {
+    "micro_animations": {
+      "hover": "transition-all duration-200 ease-out hover:-translate-y-1",
+      "press": "active:scale-95",
+      "reveal": "animate-in fade-in zoom-in duration-500",
+      "leaderboard_shift": "transition-transform duration-700 ease-in-out"
+    },
+    "confetti": {
+      "library": "canvas-confetti",
+      "usage": "Trigger on podium screen reveal. Shoot from bottom corners. Use cyan and pink brand colors."
+    }
+  },
+  "accessibility": {
+    "contrast": "Ensure text over answer colors is either black or white depending on APCA contrast. For instance, black text on the Yellow Circle.",
+    "colorblind_safe": "Rely strictly on the combined identity of Color + Shape. The player phone screen should show huge centralized icons of the shapes if text is omitted.",
+    "test_ids": "Include data-testid on all interactive elements (e.g., data-testid='join-game-btn', data-testid='answer-btn-triangle')."
+  },
+  "media": {
+    "image_urls": {
+      "hero_background": {
+        "url": "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMG5lb24lMjBiYWNrZ3JvdW5kJTIwZGFya3xlbnwwfHx8fDE3ODM0NjI2NDV8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Abstract purple and pink gradient waves, use as a subtle low-opacity background for the landing page."
+      }
+    }
+  },
+  "instructions_to_main_agent": [
+    "Install required icon library (e.g., lucide-react) for the answer shapes: Triangle, Diamond, Circle, Square.",
+    "Install 'canvas-confetti' for podium celebration effects.",
+    "Install 'framer-motion' to handle smooth animated transitions between the 4 game loop phases (Preview, Active, Reveal, Leaderboard) and leaderboard rank shifting.",
+    "Implement the Dual-Context architecture. Ensure you have clear routing or layout divergence for `/host` and `/player`.",
+    "Host view must not require scrolling (100vh locked) and should use responsive typography (e.g., text-[4vw]) to guarantee it fits across different TV/Laptop aspect ratios.",
+    "Player view must be locked to 100svh (mobile viewport safe) to prevent accidental scrolling when mashing answer buttons.",
+    "Ensure all buttons have robust active/press states (e.g., translate-y-1 to mimic a physical button press) for tactile feedback."
+  ]
+}
