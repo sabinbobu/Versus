@@ -46,6 +46,7 @@ app.add_middleware(
 
 class CreateRoom(BaseModel):
     mode: str = "1v1"
+    game_type: str = "quiz"
     topic: str = "General knowledge"
     difficulty: str = "mixed"
     num_questions: int = 10
@@ -65,6 +66,11 @@ class Answer(BaseModel):
     choice: int
 
 
+class MemoryResult(BaseModel):
+    token: str
+    mistakes: int = 0
+
+
 @api.get("/")
 async def root():
     return {"app": "Versus", "status": "ok"}
@@ -73,12 +79,13 @@ async def root():
 @api.post("/rooms")
 async def create_room(body: CreateRoom):
     mode = body.mode if body.mode in ("1v1", "team") else "1v1"
+    gtype = body.game_type if body.game_type in ("quiz", "reaction", "memory") else "quiz"
     num = body.num_questions if body.num_questions in (5, 10, 15) else 10
     tpq = body.time_per_question if body.time_per_question in (10, 15, 20, 30) else 15
     lang = body.language if body.language in ("en", "ro") else "en"
     diff = body.difficulty if body.difficulty in ("easy", "medium", "hard", "mixed") else "mixed"
     room = engine.create_room(
-        mode=mode, topic=(body.topic or "General knowledge").strip()[:80],
+        mode=mode, game_type=gtype, topic=(body.topic or "General knowledge").strip()[:80],
         difficulty=diff, num_questions=num, time_per_question=tpq, language=lang)
     return {"code": room.code}
 
@@ -168,6 +175,15 @@ async def answer(code: str, body: Answer):
     return {"accepted": ok}
 
 
+@api.post("/rooms/{code}/memory")
+async def memory_result(code: str, body: MemoryResult):
+    room = engine.get(code)
+    if not room:
+        raise HTTPException(404, "Room not found")
+    ok = await engine.submit_memory(room, body.token, body.mistakes)
+    return {"accepted": ok}
+
+
 @api.post("/rooms/{code}/rematch")
 async def rematch(code: str):
     room = engine.get(code)
@@ -191,6 +207,8 @@ async def ws_endpoint(ws: WebSocket, code: str, role: str = "player", token: str
             msg = await ws.receive_json()
             if msg.get("type") == "answer" and token:
                 await engine.submit_answer(room, token, msg.get("choice"))
+            elif msg.get("type") == "memory" and token:
+                await engine.submit_memory(room, token, msg.get("mistakes", 0))
     except WebSocketDisconnect:
         await engine.disconnect(room, ws)
     except Exception:

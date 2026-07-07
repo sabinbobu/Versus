@@ -15,6 +15,7 @@ PREVIEW_S = 3
 REVEAL_S = 5
 LEADERBOARD_S = 4
 SUDDEN_DEATH_S = 15
+REACT_WINDOW_MS = 2000  # scoring window for reaction taps (from light-on)
 
 SIDE_COLORS = {"A": "#06B6D4", "B": "#EC4899"}
 
@@ -29,9 +30,10 @@ def gen_code() -> str:
 
 class Room:
     def __init__(self, code, mode, topic, difficulty, num_questions,
-                 time_per_question, language):
+                 time_per_question, language, game_type="quiz"):
         self.code = code
         self.mode = mode  # "1v1" | "team"
+        self.game_type = game_type  # "quiz" | "reaction" | "memory"
         self.topic = topic
         self.difficulty = difficulty
         self.num_questions = num_questions
@@ -43,6 +45,11 @@ class Room:
         self.questions = []
         self.questions_ready = False
         self.generating = True
+
+        # reaction-mode transient state
+        self.reaction_live = False
+        self.reaction_lit_at = 0
+        self.phase_total_ms = 0
 
         # sides -> {name, players: {token: player}}
         self.sides = {
@@ -128,28 +135,47 @@ class Room:
 
     def score_question(self, qi):
         q = self.questions[qi]
-        ci = q["correct_index"]
+        gt = q.get("type", "quiz")
         T = self.time_per_question
         ans = self.answers.get(qi, {})
         self.q_points.setdefault(qi, {})
         for token in self.all_players().keys():
             a = ans.get(token)
-            if a and a["choice"] == ci:
-                t = min(max(a["time_ms"] / 1000.0, 0.0), T)
-                base = 500 + round(500 * (1 - t / T))
+            correct = False
+            base = 0
+            resp = 0
+            if a:
+                resp = a.get("time_ms", 0)
+            if gt == "reaction":
+                if a and not a.get("false_start") and a["choice"] == q["correct_index"]:
+                    correct = True
+                    rt = a.get("react_ms", a.get("time_ms", REACT_WINDOW_MS))
+                    frac = max(0.0, 1 - min(rt, REACT_WINDOW_MS) / REACT_WINDOW_MS)
+                    base = 500 + round(500 * frac)
+            elif gt == "memory":
+                if a and a.get("done"):
+                    correct = True
+                    Td = q.get("duration_ms", T * 1000) / 1000.0
+                    t = min(max(a["time_ms"] / 1000.0, 0.0), Td)
+                    base = 500 + round(500 * (1 - t / Td))
+                    base = max(0, base - a.get("mistakes", 0) * 25)
+            else:  # quiz
+                if a and a["choice"] == q["correct_index"]:
+                    correct = True
+                    t = min(max(a["time_ms"] / 1000.0, 0.0), T)
+                    base = 500 + round(500 * (1 - t / T))
+            if correct:
                 self.streaks[token] = self.streaks.get(token, 0) + 1
                 s = self.streaks[token]
                 bonus = min(300, (s - 2) * 100) if s >= 3 else 0
                 pts = base + bonus
-                a["correct"] = True
             else:
                 self.streaks[token] = 0
                 pts = 0
-                if a:
-                    a["correct"] = False
             if a:
+                a["correct"] = correct
                 a["points"] = pts
-                self.resp_time[token] = self.resp_time.get(token, 0) + a["time_ms"]
+                self.resp_time[token] = self.resp_time.get(token, 0) + resp
             self.q_points[qi][token] = pts
             self.best_streak[token] = max(self.best_streak.get(token, 0),
                                           self.streaks.get(token, 0))
@@ -181,6 +207,7 @@ class Room:
         data = {
             "code": self.code,
             "mode": self.mode,
+            "game_type": self.game_type,
             "topic": self.topic,
             "difficulty": self.difficulty,
             "language": self.language,
@@ -193,6 +220,7 @@ class Room:
             "time_per_question": self.time_per_question,
             "current_index": self.current_index,
             "phase_ends_at": self.phase_ends_at,
+            "phase_total_ms": self.phase_total_ms,
             "remaining_ms": self.remaining_ms,
             "paused": self.paused,
             "empty_side": self.empty_side,
@@ -202,17 +230,31 @@ class Room:
         qi = self.current_index
         if 0 <= qi < len(self.questions) and self.phase != "lobby":
             q = self.questions[qi]
+            qtype = q.get("type", "quiz")
             qobj = {
                 "number": qi + 1,
                 "category": q["category"],
                 "difficulty": q["difficulty"],
+                "type": qtype,
             }
-            if show_q or self.phase == "sudden_death":
+            if qtype == "reaction":
                 qobj["question"] = q["question"]
-                qobj["options"] = q["options"]
-            if reveal_phase:
-                qobj["correct_index"] = q["correct_index"]
-                qobj["explanation"] = q["explanation"]
+                qobj["reaction_live"] = self.reaction_live
+                if self.reaction_live or reveal_phase:
+                    qobj["target"] = q["correct_index"]
+                    qobj["correct_index"] = q["correct_index"]
+            elif qtype == "memory":
+                qobj["question"] = q["question"]
+                qobj["deck"] = q["deck"]
+                qobj["pairs"] = q["pairs"]
+                qobj["duration_ms"] = q.get("duration_ms", 0)
+            else:  # quiz
+                if show_q:
+                    qobj["question"] = q["question"]
+                    qobj["options"] = q["options"]
+                if reveal_phase:
+                    qobj["correct_index"] = q["correct_index"]
+                    qobj["explanation"] = q["explanation"]
             data["question"] = qobj
 
             ans = self.answers.get(qi, {})
@@ -231,7 +273,10 @@ class Room:
                             "choice": a["choice"],
                             "correct": a.get("correct", False),
                             "points": a.get("points", 0),
-                            "time_ms": a["time_ms"],
+                            "time_ms": a.get("time_ms", 0),
+                            "mistakes": a.get("mistakes"),
+                            "false_start": a.get("false_start", False),
+                            "done": a.get("done", False),
                         }
                 data["distribution"] = dist
                 data["results"] = results
@@ -295,17 +340,62 @@ class Engine:
         room.generating = True
         room.questions_ready = False
         try:
-            qs = await question_gen.generate_questions(
-                room.topic, room.difficulty, room.num_questions,
-                room.language, exclude_hashes=exclude or room.served_hashes)
-            room.questions = qs
-            room.questions_ready = len(qs) >= 1
+            if room.game_type == "reaction":
+                room.questions = self._build_reaction(room)
+                room.questions_ready = True
+            elif room.game_type == "memory":
+                room.questions = self._build_memory(room)
+                room.questions_ready = True
+            else:
+                qs = await question_gen.generate_questions(
+                    room.topic, room.difficulty, room.num_questions,
+                    room.language, exclude_hashes=exclude or room.served_hashes)
+                room.questions = qs
+                room.questions_ready = len(qs) >= 1
         except Exception as e:
             logger.error(f"generation error: {e}")
             room.questions_ready = False
         finally:
             room.generating = False
         await self.broadcast(room)
+
+    def _build_reaction(self, room):
+        rounds = []
+        for _ in range(room.num_questions):
+            rounds.append({
+                "type": "reaction",
+                "category": "Reaction",
+                "difficulty": "-",
+                "question": "Tap the shape the moment it lights up!",
+                "options": ["", "", "", ""],
+                "correct_index": random.randint(0, 3),
+                "delay_ms": random.randint(800, 2800),
+                "explanation": "",
+                "hash": uuid.uuid4().hex,
+            })
+        return rounds
+
+    def _build_memory(self, room):
+        pairs = {"easy": 4, "medium": 6, "hard": 8, "mixed": 6}.get(room.difficulty, 6)
+        rounds = []
+        for _ in range(room.num_questions):
+            faces = list(range(pairs))
+            deck = faces + faces
+            random.shuffle(deck)
+            rounds.append({
+                "type": "memory",
+                "category": "Memory",
+                "difficulty": "-",
+                "question": "Match all the pairs as fast as you can!",
+                "options": ["", "", "", ""],
+                "correct_index": -1,
+                "deck": deck,
+                "pairs": pairs,
+                "duration_ms": min(70000, pairs * 7000 + 8000),
+                "explanation": "",
+                "hash": uuid.uuid4().hex,
+            })
+        return rounds
 
     # ---- connection management ----
     async def connect(self, room, ws, role, token):
@@ -437,7 +527,7 @@ class Engine:
         room.skip_flag = True
 
     async def submit_answer(self, room, token, choice):
-        if room.phase != "active" and room.phase != "sudden_death":
+        if room.phase not in ("active", "sudden_death"):
             return False
         if room.paused or room.remaining_ms <= 0:
             return False
@@ -450,13 +540,49 @@ class Engine:
             return False
         if not isinstance(choice, int) or choice < 0 or choice > 3:
             return False
-        t_ms = now_ms() - room.active_start_ms
-        room.answers[qi][token] = {"choice": choice, "time_ms": max(0, t_ms)}
+        q = room.questions[qi]
+        gt = q.get("type", "quiz")
+        rec = {"choice": choice}
+        if gt == "reaction":
+            if not room.reaction_live:
+                rec["false_start"] = True
+                rec["time_ms"] = 999999
+                rec["react_ms"] = 999999
+            else:
+                rt = max(0, now_ms() - room.reaction_lit_at)
+                rec["react_ms"] = rt
+                rec["time_ms"] = rt
+        else:
+            rec["time_ms"] = max(0, now_ms() - room.active_start_ms)
+        room.answers[qi][token] = rec
         if room.phase == "sudden_death":
-            q = room.questions[qi]
-            if choice == q["correct_index"] and room.sudden_death_winner is None:
+            ok = (not rec.get("false_start")) and choice == q["correct_index"]
+            if ok and room.sudden_death_winner is None:
                 room.sudden_death_winner = room.side_of(token)
                 room.skip_flag = True
+        await self.broadcast(room)
+        return True
+
+    async def submit_memory(self, room, token, mistakes):
+        if room.phase != "active":
+            return False
+        if room.paused or room.remaining_ms <= 0:
+            return False
+        qi = room.current_index
+        q = room.questions[qi]
+        if q.get("type") != "memory":
+            return False
+        p = room.all_players().get(token)
+        if not p:
+            return False
+        room.answers.setdefault(qi, {})
+        if token in room.answers[qi]:
+            return False
+        t_ms = max(0, now_ms() - room.active_start_ms)
+        room.answers[qi][token] = {
+            "choice": -1, "done": True,
+            "mistakes": max(0, int(mistakes or 0)), "time_ms": t_ms,
+        }
         await self.broadcast(room)
         return True
 
@@ -479,12 +605,15 @@ class Engine:
         room.sudden_death_winner = None
         room.empty_side = None
         room.paused = False
+        room.reaction_live = False
+        room.reaction_lit_at = 0
         room.gen_task = asyncio.create_task(self._generate(room, exclude=room.served_hashes))
         await self.broadcast(room)
 
     # ---- phase runner ----
     async def _wait(self, room, seconds, allow_early=False):
         room.remaining_ms = int(seconds * 1000)
+        room.phase_total_ms = int(seconds * 1000)
         room.phase_ends_at = now_ms() + room.remaining_ms
         await self.broadcast(room)
         while room.remaining_ms > 0:
@@ -495,6 +624,32 @@ class Engine:
                 continue
             room.remaining_ms -= 100
             if allow_early and self._all_answered(room):
+                return "early"
+        return "timeout"
+
+    async def _active_reaction(self, room):
+        q = room.questions[room.current_index]
+        room.reaction_live = False
+        room.reaction_lit_at = 0
+        T = room.time_per_question
+        room.remaining_ms = int(T * 1000)
+        room.phase_total_ms = int(T * 1000)
+        room.phase_ends_at = now_ms() + room.remaining_ms
+        await self.broadcast(room)
+        lit_target = room.active_start_ms + q.get("delay_ms", 1000)
+        while room.remaining_ms > 0:
+            await asyncio.sleep(0.1)
+            if room.skip_flag:
+                return "skip"
+            if room.paused:
+                lit_target += 100
+                continue
+            room.remaining_ms -= 100
+            if not room.reaction_live and now_ms() >= lit_target:
+                room.reaction_live = True
+                room.reaction_lit_at = now_ms()
+                await self.broadcast(room)
+            if room.reaction_live and self._all_answered(room):
                 return "early"
         return "timeout"
 
@@ -518,9 +673,18 @@ class Engine:
                     continue
 
                 room.phase = "active"
+                room.reaction_live = False
                 room.answers.setdefault(room.current_index, {})
                 room.active_start_ms = now_ms()
-                res = await self._wait(room, room.time_per_question, allow_early=True)
+                gt = room.questions[room.current_index].get("type", "quiz")
+                if gt == "reaction":
+                    res = await self._active_reaction(room)
+                elif gt == "memory":
+                    dur = room.questions[room.current_index].get("duration_ms",
+                                                                  room.time_per_question * 1000) / 1000.0
+                    res = await self._wait(room, dur, allow_early=True)
+                else:
+                    res = await self._wait(room, room.time_per_question, allow_early=True)
                 if res == "skip":
                     room.skip_flag = False
                     room.answers[room.current_index] = {}
@@ -560,16 +724,30 @@ class Engine:
             return
         # sudden death
         room.tiebreaker = "sudden_death"
-        extra = await question_gen.generate_questions(
-            room.topic, room.difficulty, 1, room.language,
-            exclude_hashes=room.served_hashes)
-        if extra:
-            room.questions.append(extra[0])
+        round_ = None
+        if room.game_type == "quiz":
+            extra = await question_gen.generate_questions(
+                room.topic, room.difficulty, 1, room.language,
+                exclude_hashes=room.served_hashes)
+            round_ = extra[0] if extra else None
+        else:
+            round_ = {
+                "type": "reaction", "category": "Reaction", "difficulty": "-",
+                "question": "Sudden death — tap the lit shape first!",
+                "options": ["", "", "", ""],
+                "correct_index": random.randint(0, 3), "delay_ms": 300,
+                "explanation": "", "hash": uuid.uuid4().hex,
+            }
+        if round_:
+            room.questions.append(round_)
             room.current_index = len(room.questions) - 1
             room.skip_flag = False
             room.phase = "sudden_death"
             room.answers.setdefault(room.current_index, {})
             room.active_start_ms = now_ms()
+            if round_.get("type") == "reaction":
+                room.reaction_live = True
+                room.reaction_lit_at = now_ms()
             await self._wait(room, SUDDEN_DEATH_S, allow_early=True)
             room.remaining_ms = 0
         if room.sudden_death_winner:
