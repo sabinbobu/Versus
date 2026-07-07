@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { loadPlayer } from "../lib/api";
+import { loadPlayer, http } from "../lib/api";
 import { useRoomState } from "../lib/useRoomState";
 import { ShapeIcon, ANSWERS } from "../components/Shapes";
-import { Check, Loader2, Trophy, Wifi, WifiOff } from "lucide-react";
+import MemoryBoard from "../components/MemoryBoard";
+import { Check, Loader2, Trophy, Wifi, WifiOff, Brain } from "lucide-react";
 
 const SIDE_COLOR = { A: "#06B6D4", B: "#EC4899" };
 
@@ -28,6 +29,9 @@ export default function PlayerRoom() {
   useEffect(() => { setMyChoice(null); }, [state?.current_index, state?.phase === "preview"]);
 
   const tap = (i) => { setMyChoice(i); sendAnswer(i); };
+  const memoryDone = useCallback((mistakes) => {
+    http.post(`/rooms/${code}/memory`, { token: me?.token, mistakes }).catch(() => {});
+  }, [code, me]);
 
   const myId = me?.id;
   const mySide = me?.side;
@@ -48,6 +52,9 @@ export default function PlayerRoom() {
 
   const phase = state.phase;
   const myName = me?.name;
+  const qtype = state.question?.type || state.game_type || "quiz";
+  const reactionLive = state.question?.reaction_live;
+  const target = state.question?.target;
 
   return (
     <div className="min-h-[100svh] flex flex-col" style={{ background: `radial-gradient(circle at 50% 0%, ${accent}22, #05050A 55%)` }}>
@@ -75,11 +82,10 @@ export default function PlayerRoom() {
           </Center>
         )}
 
-        {(phase === "active" || phase === "sudden_death") && (
+        {(phase === "active" || phase === "sudden_death") && qtype === "quiz" && (
           locked ? (
             <Center>
-              <div className="w-28 h-28 rounded-3xl flex items-center justify-center mb-5"
-                style={{ background: ANSWERS[myChoice ?? 0]?.color }}>
+              <div className="w-28 h-28 rounded-3xl flex items-center justify-center mb-5" style={{ background: ANSWERS[myChoice ?? 0]?.color }}>
                 <ShapeIcon index={myChoice ?? 0} size={64} />
               </div>
               <h2 className="text-3xl font-black font-heading mb-1" data-testid="answer-locked">Answer locked</h2>
@@ -99,22 +105,81 @@ export default function PlayerRoom() {
           )
         )}
 
+        {(phase === "active" || phase === "sudden_death") && qtype === "reaction" && (
+          locked ? (
+            <Center>
+              <div className="w-28 h-28 rounded-3xl flex items-center justify-center mb-5" style={{ background: ANSWERS[myChoice ?? 0]?.color }}>
+                <ShapeIcon index={myChoice ?? 0} size={64} />
+              </div>
+              <h2 className="text-3xl font-black font-heading mb-1" data-testid="answer-locked">Locked in!</h2>
+              <p className="text-white/50">Look up at the big screen 👀</p>
+            </Center>
+          ) : (
+            <div className="flex flex-col gap-4 flex-1 justify-center" data-testid="reaction-buttons">
+              <p className={`text-center font-black uppercase tracking-widest mb-1 ${reactionLive ? "text-green-400 animate-pulse" : "text-white/40"}`}>
+                {reactionLive ? "⚡ TAP IT NOW!" : "Wait for the light…"}
+              </p>
+              {ANSWERS.map((a, i) => {
+                const isTarget = reactionLive && i === target;
+                return (
+                  <button key={i} data-testid={`reaction-btn-${i}`} onClick={() => tap(i)}
+                    className={`w-full flex-1 max-h-40 rounded-3xl flex items-center justify-center transition-all active:scale-95 ${isTarget ? "scale-105 animate-pulse" : ""}`}
+                    style={{
+                      background: isTarget ? a.color : "#12121f",
+                      boxShadow: isTarget ? `0 0 40px ${a.color}` : "inset 0 0 0 1px rgba(255,255,255,0.06)",
+                    }}>
+                    {isTarget && <ShapeIcon index={i} size={72} />}
+                  </button>
+                );
+              })}
+            </div>
+          )
+        )}
+
+        {phase === "active" && qtype === "memory" && (
+          locked ? (
+            <Center>
+              <Brain size={64} className="text-green-400 mb-4" />
+              <h2 className="text-3xl font-black font-heading mb-1" data-testid="memory-done">Solved!</h2>
+              <p className="text-white/50">Waiting for the round to end…</p>
+            </Center>
+          ) : (
+            <div className="flex-1 flex flex-col justify-center">
+              <MemoryBoard deck={state.question?.deck || []} onComplete={memoryDone} />
+            </div>
+          )
+        )}
+
         {(phase === "reveal") && (
           <Center>
-            {myResult ? (
+            {myResult ? (() => {
+              const good = myResult.correct;
+              let title;
+              let sub = null;
+              if (qtype === "reaction") {
+                title = myResult.false_start ? "Too early! 🚫" : good ? "Nailed it! ⚡" : "Missed";
+              } else if (qtype === "memory") {
+                title = good ? "Solved! 🧠" : "Time's up";
+                if (good) sub = `${myResult.mistakes ?? 0} misses`;
+              } else {
+                title = good ? "Correct!" : "Wrong";
+              }
+              return (
+                <>
+                  <div className={`w-28 h-28 rounded-full flex items-center justify-center mb-5 ${good ? "bg-green-500/20" : "bg-red-500/20"}`}>
+                    <h2 className="text-5xl">{good ? "✓" : "✕"}</h2>
+                  </div>
+                  <h2 className={`text-4xl font-black font-heading mb-2 ${good ? "text-green-400" : "text-red-400"}`} data-testid="player-result">{title}</h2>
+                  <p className="text-2xl font-bold mb-1">+{myResult.points} pts</p>
+                  {sub && <p className="text-white/50">{sub}</p>}
+                  {rank && <p className="text-white/50">Rank #{rank} of {allPlayersSorted(state).length}</p>}
+                </>
+              );
+            })() : (
               <>
-                <div className={`w-28 h-28 rounded-full flex items-center justify-center mb-5 ${myResult.correct ? "bg-green-500/20" : "bg-red-500/20"}`}>
-                  <h2 className="text-5xl">{myResult.correct ? "✓" : "✕"}</h2>
-                </div>
-                <h2 className={`text-4xl font-black font-heading mb-2 ${myResult.correct ? "text-green-400" : "text-red-400"}`} data-testid="player-result">
-                  {myResult.correct ? "Correct!" : "Wrong"}
+                <h2 className="text-3xl font-black font-heading text-white/60 mb-2" data-testid="player-result">
+                  {qtype === "memory" ? "Time's up" : qtype === "reaction" ? "No tap" : "No answer"}
                 </h2>
-                <p className="text-2xl font-bold mb-1">+{myResult.points} pts</p>
-                {rank && <p className="text-white/50">Rank #{rank} of {allPlayersSorted(state).length}</p>}
-              </>
-            ) : (
-              <>
-                <h2 className="text-3xl font-black font-heading text-white/60 mb-2">No answer</h2>
                 <p className="text-white/40">0 pts this round</p>
               </>
             )}

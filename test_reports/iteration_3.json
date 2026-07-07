@@ -1,0 +1,37 @@
+{
+  "summary": "Validated the TWO NEW game modes (Reaction, Memory) plus quiz regression. Backend: 8/8 pytest passed in /app/backend/tests/test_new_modes.py (reaction ready-instant, reaction false-start vs correct scoring 500-1000 vs wrong=0, memory deck size for easy/medium/hard, memory scoring with mistakes*25 penalty, non-submitter=0, quiz regression via GPT-5.5 reaches podium). Frontend: Setup selector visibility rules verified (quiz shows topic+lang+tpq+diff; reaction hides topic+lang+diff, keeps tpq; memory hides topic+lang+tpq, keeps diff). Full Reaction E2E and Memory E2E completed with host (1920x1080) + 2 players in SEPARATE browser contexts (390x844). Reaction: 'Wait for the light…' -> 'GO! TAP IT!' with reaction-cell-{target} lit, player reaction-btn-{target} highlighted, tap yields answer-locked, game reaches podium-winner with rematch-btn/new-game-btn. Memory: memory-board renders 8 tiles for easy (4 pairs*2), mismatch flip increments memory-mistakes to 1, host MemoryActive shows 'Match the pairs on your phone!', game reaches podium-winner. Both modes function correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_new_modes.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_new_modes.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "SPEC vs IMPL nit: spec says 'Selecting Reaction hides the Topic input and Language selector' (implies difficulty stays). Current Setup.jsx also hides Difficulty for reaction (only rendered when isQuiz||isMemory). Difficulty has no effect on reaction rounds server-side, so hiding it is arguably cleaner UX but diverges from a literal reading of the spec. Non-blocking.",
+    "engine._run: when host clicks skip during ACTIVE, room.answers[current_index] is wiped ({}) before continuing to the next question. Combined with tests/E2E that skip-fast after a valid answer, this means the answer is discarded and score_question is never called for that round -> all-zero rounds and the game frequently ends on 'sudden death'. This is documented behavior but worth flagging: for QA runs 'skip' looks like a bug (correct taps yield 0 pts on the podium). Consider skipping to reveal instead of wiping (score_question then continue).",
+    "MemoryBoard.jsx: `grid-cols-${cols}` uses dynamic Tailwind class which won't be present in the JIT purge in production; only works because inline gridTemplateColumns overrides it. Cosmetic — the inline style is doing the work. Could drop the dynamic class.",
+    "score_question memory branch caps base at 500 + 500*(1 - t/Td) then subtracts mistakes*25 but does NOT add streak bonus in the same block (it does at the outer if correct). OK — logic works. However `base = max(0, base - a.get('mistakes', 0) * 25)` clamps at 0 which means a streak bonus can still be added on top when base is 0 due to too many mistakes; effectively still 'correct' -> streak stays alive even if points are 0. Minor edge case.",
+    "serialize() adds `reaction_live` on the reveal phase question object regardless of value; harmless. Also `correct_index` on reaction is included both in live and reveal — that's what allows the test to read target while active. Good.",
+    "REGRESSION not touched by this run: WS reconnect fix and empty-side overlay from iteration_2 remain in place; new modes reuse useRoomState so they inherit that behavior automatically.",
+    "server.py routes MemoryResult uses `int(mistakes or 0)` and clamps at 0 in engine.submit_memory — safe. Pydantic already enforces int with default 0."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_new_modes.py (new file)"
+  ],
+  "success_rate": {"backend": "100% (8/8 new pytest for reaction+memory+quiz regression; iteration_1 18/18 unchanged)", "frontend": "100% - setup selector rules + Reaction E2E + Memory E2E all reach podium in separate browser contexts"},
+  "test_credentials": "None (no auth).",
+  "seed_data_creation": "Ephemeral rooms. Codes used during this run (all cleaned up as memory-only rooms): 48HZY (reaction), 254LS (memory).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Reaction/Memory backends generate rounds locally (no LLM) — the room is ready_instant (<1s). For reaction, tests poll GET /api/rooms/{code}/state and read state.question.target once state.question.reaction_live becomes true (target only appears then). For memory, easy=4/medium=6/hard=8 pairs; deck length = pairs*2; duration_ms = min(70000, pairs*7000+8000). Skipping during ACTIVE wipes room.answers[current_index] — expected side effect is many 0-score rounds ending in sudden death; this is a game-engine feature, not a bug. For future E2E, players MUST use separate browser contexts (localStorage tokens collide). Reaction/Memory podium has been reached repeatably in ~15s using api-driven skip. Full solves of the memory board via automation are unnecessary — validating tile interactivity + skip-to-podium is sufficient per the spec.",
+  "rca of the issue": "No bugs found in this iteration. All acceptance criteria from the review request met."
+}

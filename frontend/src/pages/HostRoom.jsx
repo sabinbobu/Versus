@@ -6,15 +6,15 @@ import confetti from "canvas-confetti";
 import { http } from "../lib/api";
 import { useRoomState, useTick } from "../lib/useRoomState";
 import { ShapeIcon, ANSWERS } from "../components/Shapes";
-import { Play, Pause, SkipForward, Loader2, Trophy, Zap, Crown, Users } from "lucide-react";
+import { Play, Pause, SkipForward, Loader2, Trophy, Zap, Crown, Users, Brain } from "lucide-react";
 
 const SIDE_COLOR = { A: "#06B6D4", B: "#EC4899" };
 
 function useCountdown(state) {
   useTick(100);
   if (!state) return { sec: 0, frac: 0 };
-  const totalMap = { preview: 3000, active: state.time_per_question * 1000, reveal: 5000, leaderboard: 4000, sudden_death: 15000 };
-  const total = totalMap[state.phase] || 1000;
+  const fallback = { preview: 3000, active: (state.time_per_question || 15) * 1000, reveal: 5000, leaderboard: 4000, sudden_death: 15000 };
+  const total = state.phase_total_ms || fallback[state.phase] || 1000;
   let remaining = state.paused ? state.remaining_ms : Math.max(0, state.phase_ends_at - Date.now());
   remaining = Math.min(remaining, total);
   return { sec: Math.ceil(remaining / 1000), frac: Math.max(0, remaining / total) };
@@ -40,7 +40,7 @@ export default function HostRoom() {
       {state.status === "lobby" && <Lobby state={state} code={code} cmd={cmd} />}
       {phase === "preview" && <Preview state={state} />}
       {(phase === "active" || phase === "sudden_death") && <Active state={state} cmd={cmd} />}
-      {phase === "reveal" && <Reveal state={state} cmd={cmd} />}
+      {phase === "reveal" && (state.game_type === "memory" ? <MemoryReveal state={state} cmd={cmd} /> : <Reveal state={state} cmd={cmd} />)}
       {phase === "leaderboard" && <Leaderboard state={state} cmd={cmd} />}
       {phase === "podium" && <Podium state={state} code={code} cmd={cmd} nav={nav} />}
 
@@ -111,7 +111,7 @@ function Lobby({ state, code, cmd }) {
     <div className="min-h-screen flex flex-col">
       <div className="text-center pt-8">
         <h1 className="text-2xl font-black font-heading gradient-text uppercase tracking-widest">Versus Lobby</h1>
-        <p className="text-white/40 text-sm mt-1">{state.mode === "team" ? "Team vs Team" : "1 vs 1"} · {state.topic} · {state.num_questions} questions</p>
+        <p className="text-white/40 text-sm mt-1">{state.mode === "team" ? "Team vs Team" : "1 vs 1"} · {(state.game_type || "quiz")[0].toUpperCase() + (state.game_type || "quiz").slice(1)}{state.game_type === "quiz" ? ` · ${state.topic}` : ""} · {state.num_questions} {state.game_type === "quiz" ? "questions" : "rounds"}</p>
       </div>
       <div className="flex-1 flex">
         <SideCol s="A" />
@@ -141,25 +141,49 @@ function Preview({ state }) {
   );
 }
 
-function Active({ state, cmd }) {
+function TimerFooter({ state }) {
   const { sec, frac } = useCountdown(state);
+  return (
+    <>
+      <div className="w-full h-5 rounded-full bg-white/10 overflow-hidden">
+        <div className="h-full rounded-full transition-all duration-100 ease-linear"
+          style={{ width: `${frac * 100}%`, background: sec <= 5 ? "#FF3366" : "linear-gradient(90deg,#7c3aed,#06b6d4)" }} />
+      </div>
+      <p className="text-center text-4xl font-black font-heading mt-4">{state.paused ? "PAUSED" : sec}</p>
+    </>
+  );
+}
+
+function ActiveHeader({ state }) {
   const q = state.question || {};
   const answered = state.answered_ids?.length || 0;
   const totalConn = state.connected_count || 0;
   return (
+    <div className="flex items-center justify-between mb-6">
+      <span className="text-white/40 uppercase tracking-widest font-bold">
+        {state.phase === "sudden_death" ? "Sudden Death" : `${q.category} · ${q.number}/${state.total_questions}`}
+      </span>
+      <span className="text-white/40 uppercase tracking-widest font-bold" data-testid="answered-count">{answered}/{totalConn} answered</span>
+    </div>
+  );
+}
+
+function Active({ state, cmd }) {
+  const qtype = state.question?.type || state.game_type || "quiz";
+  if (qtype === "reaction") return <ReactionActive state={state} cmd={cmd} />;
+  if (qtype === "memory") return <MemoryActive state={state} cmd={cmd} />;
+  return <QuizActive state={state} cmd={cmd} />;
+}
+
+function QuizActive({ state, cmd }) {
+  const q = state.question || {};
+  return (
     <div className="min-h-screen flex flex-col p-10">
       <HostControls state={state} cmd={cmd} />
-      <div className="flex items-center justify-between mb-6">
-        <span className="text-white/40 uppercase tracking-widest font-bold">
-          {state.phase === "sudden_death" ? "Sudden Death" : `Q${q.number} / ${state.total_questions}`}
-        </span>
-        <span className="text-white/40 uppercase tracking-widest font-bold" data-testid="answered-count">{answered}/{totalConn} answered</span>
-      </div>
-
+      <ActiveHeader state={state} />
       <div className="flex-1 flex items-center justify-center">
         <h2 className="text-[3.5vw] leading-tight text-center max-w-6xl font-black font-heading" data-testid="host-question">{q.question}</h2>
       </div>
-
       <div className="grid grid-cols-2 gap-6 mb-8">
         {(q.options || []).map((opt, i) => (
           <div key={i} data-testid={`host-option-${i}`}
@@ -170,12 +194,105 @@ function Active({ state, cmd }) {
           </div>
         ))}
       </div>
+      <TimerFooter state={state} />
+    </div>
+  );
+}
 
-      <div className="w-full h-5 rounded-full bg-white/10 overflow-hidden">
-        <div className="h-full rounded-full transition-all duration-100 ease-linear"
-          style={{ width: `${frac * 100}%`, background: sec <= 5 ? "#FF3366" : "linear-gradient(90deg,#7c3aed,#06b6d4)" }} />
+function ReactionActive({ state, cmd }) {
+  const q = state.question || {};
+  const live = q.reaction_live;
+  const target = q.target;
+  return (
+    <div className="min-h-screen flex flex-col p-10">
+      <HostControls state={state} cmd={cmd} />
+      <ActiveHeader state={state} />
+      <div className="flex-1 flex flex-col items-center justify-center">
+        <h2 className={`text-[4vw] font-black font-heading mb-10 ${live ? "text-green-400 animate-pulse" : "text-white/40"}`} data-testid="host-question">
+          {live ? "GO! TAP IT!" : "Wait for the light…"}
+        </h2>
+        <div className="grid grid-cols-2 gap-8 w-full max-w-3xl">
+          {ANSWERS.map((a, i) => {
+            const isTarget = live && i === target;
+            return (
+              <div key={i} data-testid={`reaction-cell-${i}`}
+                className={`h-40 rounded-3xl flex items-center justify-center transition-all ${isTarget ? "scale-105 animate-pulse" : ""}`}
+                style={{ background: isTarget ? a.color : "#12121f", boxShadow: isTarget ? `0 0 60px ${a.color}` : "inset 0 0 0 1px rgba(255,255,255,0.06)" }}>
+                {isTarget && <ShapeIcon index={i} size={64} />}
+              </div>
+            );
+          })}
+        </div>
       </div>
-      <p className="text-center text-4xl font-black font-heading mt-4">{state.paused ? "PAUSED" : sec}</p>
+      <TimerFooter state={state} />
+    </div>
+  );
+}
+
+function MemoryActive({ state, cmd }) {
+  const done = new Set(state.answered_ids || []);
+  const players = [];
+  ["A", "B"].forEach((s) => state.sides[s].players.forEach((p) => players.push({ ...p, side: s })));
+  return (
+    <div className="min-h-screen flex flex-col p-10">
+      <HostControls state={state} cmd={cmd} />
+      <ActiveHeader state={state} />
+      <div className="flex-1 flex flex-col items-center justify-center">
+        <Brain size={72} className="text-violet-400 mb-4" />
+        <h2 className="text-[3vw] font-black font-heading mb-10 text-center" data-testid="host-question">Match the pairs on your phone!</h2>
+        <div className="grid grid-cols-2 gap-6 w-full max-w-4xl">
+          {players.map((p) => (
+            <div key={p.id} className="flex items-center justify-between px-6 py-4 rounded-2xl border" data-testid={`memory-player-${p.id}`}
+              style={{ borderColor: SIDE_COLOR[p.side] + "55", background: SIDE_COLOR[p.side] + "11" }}>
+              <span className="font-bold text-xl">{p.name}</span>
+              {done.has(p.id)
+                ? <span className="font-black text-green-400 uppercase tracking-widest">Solved ✓</span>
+                : <span className="text-white/40 uppercase tracking-widest animate-pulse">Matching…</span>}
+            </div>
+          ))}
+        </div>
+      </div>
+      <TimerFooter state={state} />
+    </div>
+  );
+}
+
+function MemoryReveal({ state, cmd }) {
+  const results = state.results || {};
+  const players = [];
+  ["A", "B"].forEach((s) => state.sides[s].players.forEach((p) => players.push({ ...p, side: s })));
+  return (
+    <div className="min-h-screen flex flex-col p-10">
+      <HostControls state={state} cmd={cmd} />
+      <h2 className="text-4xl font-black font-heading text-center gradient-text mb-3 uppercase tracking-widest">Round Results</h2>
+      {state.fastest && (
+        <div className="flex justify-center mb-8">
+          <div className="flex items-center gap-2 px-5 py-2 rounded-full bg-yellow-400/10 border border-yellow-400/30" data-testid="fastest-player">
+            <Zap size={18} className="text-yellow-400" />
+            <span className="font-bold">Fastest solver: {state.fastest.name} ({(state.fastest.time_ms / 1000).toFixed(1)}s)</span>
+          </div>
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-8 max-w-5xl mx-auto w-full">
+        {["A", "B"].map((s) => (
+          <div key={s}>
+            <h4 className="font-black text-2xl mb-3" style={{ color: SIDE_COLOR[s] }}>{SideName(state, s)}</h4>
+            <div className="space-y-2">
+              {state.sides[s].players.map((p) => {
+                const r = results[p.id];
+                return (
+                  <div key={p.id} className="flex items-center justify-between px-5 py-3 rounded-2xl bg-white/5">
+                    <span className="font-bold">{p.name}</span>
+                    {r?.done
+                      ? <span className="text-green-400 font-bold">{(r.time_ms / 1000).toFixed(1)}s · {r.mistakes} miss · +{r.points}</span>
+                      : <span className="text-red-400 font-bold">Time's up · +0</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
