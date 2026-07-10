@@ -50,10 +50,16 @@ def validate_question(q) -> bool:
 
 
 def normalize(q) -> dict:
+    options = [str(o).strip() for o in q["options"]]
+    correct = options[int(q["correct_index"])]
+    # Shuffle so the correct answer isn't always in the same position (option 0 / red).
+    order = list(range(4))
+    random.shuffle(order)
+    shuffled = [options[i] for i in order]
     return {
         "question": str(q["question"]).strip(),
-        "options": [str(o).strip() for o in q["options"]],
-        "correct_index": int(q["correct_index"]),
+        "options": shuffled,
+        "correct_index": shuffled.index(correct),
         "category": str(q.get("category", "General")).strip(),
         "difficulty": str(q.get("difficulty", "medium")).strip().lower(),
         "explanation": str(q.get("explanation", "")).strip(),
