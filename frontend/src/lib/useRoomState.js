@@ -5,9 +5,22 @@ import { http, wsUrl } from "./api";
 export function useRoomState(code, role, token) {
   const [state, setState] = useState(null);
   const [connected, setConnected] = useState(false);
+  const [redirectTo, setRedirectTo] = useState(null);
   const wsRef = useRef(null);
   const pollRef = useRef(null);
   const gotMsgRef = useRef(false);
+  const followedRef = useRef(false);
+
+  const applyState = useCallback((data) => {
+    setState(data);
+    if (!followedRef.current && data?.new_room && token) {
+      const newToken = data.new_room.tokens?.[token];
+      if (newToken) {
+        followedRef.current = true;
+        setRedirectTo(data.new_room.code);
+      }
+    }
+  }, [token]);
 
   useEffect(() => {
     if (!code) return;
@@ -20,7 +33,7 @@ export function useRoomState(code, role, token) {
       const tick = async () => {
         try {
           const r = await http.get(`/rooms/${code}/state`, { params: token ? { token } : {} });
-          if (alive) setState(r.data);
+          if (alive) applyState(r.data);
         } catch (e) {}
       };
       tick();
@@ -47,7 +60,7 @@ export function useRoomState(code, role, token) {
         stopPoll();
         try {
           const data = JSON.parse(e.data);
-          if (alive && !data.error) setState(data);
+          if (alive && !data.error) applyState(data);
         } catch {}
       };
       ws.onclose = () => {
@@ -76,7 +89,7 @@ export function useRoomState(code, role, token) {
       stopPoll();
       try { wsRef.current && wsRef.current.close(); } catch {}
     };
-  }, [code, role, token]);
+  }, [code, role, token, applyState]);
 
   const sendAnswer = useCallback((choice) => {
     const ws = wsRef.current;
@@ -87,7 +100,9 @@ export function useRoomState(code, role, token) {
     }
   }, [code, token]);
 
-  return { state, connected, sendAnswer };
+  const newTokenForMe = redirectTo && token ? state?.new_room?.tokens?.[token] : null;
+
+  return { state, connected, sendAnswer, redirectTo, newTokenForMe };
 }
 
 // Local countdown ticker for smooth timer rendering.
