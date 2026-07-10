@@ -82,6 +82,8 @@ class Room:
         self.task = None
         self.skip_flag = False
         self.created_at = now_ms()
+        self.new_room_code = None
+        self.new_room_tokens = {}
 
     # ---- player helpers ----
     def all_players(self):
@@ -296,6 +298,10 @@ class Room:
 
         if self.phase == "podium":
             data["podium"] = self._podium_payload()
+
+        if self.new_room_code:
+            data["new_room"] = {"code": self.new_room_code, "tokens": self.new_room_tokens}
+
         return data
 
     def _podium_payload(self):
@@ -650,6 +656,35 @@ class Engine:
         room.reaction_lit_at = 0
         room.gen_task = asyncio.create_task(self._generate(room, exclude=room.served_hashes))
         await self.broadcast(room)
+
+    async def new_room(self, old_room, *, mode, game_type, topic, difficulty,
+                        num_questions, time_per_question, language):
+        """Create a brand-new room and carry over currently-connected players
+        (same side, same name) under fresh per-room tokens, so they don't need
+        to re-scan a QR code. Only players connected at call time are carried."""
+        new_room_obj = self.create_room(
+            mode=mode, game_type=game_type, topic=topic, difficulty=difficulty,
+            num_questions=num_questions, time_per_question=time_per_question,
+            language=language)
+
+        token_map = {}
+        # Master first, so they retain is_master in the new room too.
+        old_master_token = old_room.master_token
+        ordered_tokens = [old_master_token] if old_master_token else []
+        ordered_tokens += [t for t in old_room.all_players().keys() if t != old_master_token]
+
+        for old_token in ordered_tokens:
+            p = old_room.all_players().get(old_token)
+            if not p or not p.get("connected"):
+                continue
+            side = old_room.side_of(old_token)
+            new_player, _ = self.join(new_room_obj, side, p["name"])
+            token_map[old_token] = new_player["token"]
+
+        old_room.new_room_code = new_room_obj.code
+        old_room.new_room_tokens = token_map
+        await self.broadcast(old_room)
+        return new_room_obj
 
     # ---- phase runner ----
     async def _wait(self, room, seconds, allow_early=False):
