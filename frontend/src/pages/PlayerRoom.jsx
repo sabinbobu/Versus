@@ -126,9 +126,14 @@ export default function PlayerRoom() {
               {phase === "sudden_death" && <p className="text-center font-black text-yellow-400 uppercase tracking-widest mb-1">Sudden Death!</p>}
               {ANSWERS.map((a, i) => (
                 <button key={i} data-testid={`answer-btn-${i}`} onClick={() => tap(i)}
-                  className="w-full flex-1 max-h-40 rounded-3xl flex items-center justify-center active:scale-95 transition-transform shadow-[0_6px_0_rgba(0,0,0,0.5)] active:shadow-none active:translate-y-1"
+                  className="w-full flex-1 max-h-40 rounded-3xl flex flex-col items-center justify-center gap-1 px-3 active:scale-95 transition-transform shadow-[0_6px_0_rgba(0,0,0,0.5)] active:shadow-none active:translate-y-1"
                   style={{ background: a.color }}>
-                  <ShapeIcon index={i} size={72} />
+                  <ShapeIcon index={i} size={40} />
+                  {state.question?.options?.[i] && (
+                    <span data-testid={`answer-btn-text-${i}`} className="font-black text-sm sm:text-base leading-tight text-center line-clamp-2" style={{ color: a.text }}>
+                      {state.question.options[i]}
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
