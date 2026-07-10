@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { loadPlayer, savePlayer, http } from "../lib/api";
 import { useRoomState } from "../lib/useRoomState";
@@ -27,8 +27,11 @@ export default function PlayerRoom() {
     if (!me?.token) nav(`/join/${code}`);
   }, [me, code, nav]);
 
+  const followedRef = useRef(false);
   useEffect(() => {
+    if (followedRef.current) return;
     if (redirectTo && newTokenForMe && me) {
+      followedRef.current = true;
       savePlayer(redirectTo, { token: newTokenForMe, id: me.id, side: me.side, name: me.name, is_master: me.is_master });
       nav(`/play/${redirectTo}`);
     }
