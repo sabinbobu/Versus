@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { loadPlayer, http } from "../lib/api";
+import { loadPlayer, savePlayer, http } from "../lib/api";
 import { useRoomState } from "../lib/useRoomState";
 import { ShapeIcon, ANSWERS } from "../components/Shapes";
 import MemoryBoard from "../components/MemoryBoard";
+import GameSettingsForm from "../components/GameSettingsForm";
 import { Check, Loader2, Trophy, Wifi, WifiOff, Brain } from "lucide-react";
 
 const SIDE_COLOR = { A: "#06B6D4", B: "#EC4899" };
@@ -19,12 +20,19 @@ export default function PlayerRoom() {
   const { code } = useParams();
   const nav = useNavigate();
   const me = loadPlayer(code);
-  const { state, connected, sendAnswer } = useRoomState(code, "player", me?.token);
+  const { state, connected, sendAnswer, redirectTo, newTokenForMe } = useRoomState(code, "player", me?.token);
   const [myChoice, setMyChoice] = useState(null);
 
   useEffect(() => {
     if (!me?.token) nav(`/join/${code}`);
   }, [me, code, nav]);
+
+  useEffect(() => {
+    if (redirectTo && newTokenForMe && me) {
+      savePlayer(redirectTo, { token: newTokenForMe, id: me.id, side: me.side, name: me.name, is_master: me.is_master });
+      nav(`/play/${redirectTo}`);
+    }
+  }, [redirectTo, newTokenForMe, me, nav]);
 
   useEffect(() => { setMyChoice(null); }, [state?.current_index, state?.phase === "preview"]);
 
@@ -220,7 +228,11 @@ export default function PlayerRoom() {
               {state.podium?.winner === mySide ? "You won! 🎉" : state.podium?.winner === "tie" ? "It's a tie!" : "Good game!"}
             </h2>
             {rank && <p className="text-white/60 text-xl">You finished #{rank}</p>}
-            <p className="text-white/40 mt-4 text-sm">Watch the big screen for the podium.</p>
+            {isMaster ? (
+              <MasterPodiumActions code={code} state={state} nav={nav} />
+            ) : (
+              <p className="text-white/40 mt-4 text-sm">Watch the big screen for the podium.</p>
+            )}
           </Center>
         )}
       </div>
@@ -233,4 +245,90 @@ function Center({ children }) {
 }
 function Wrap({ children, accent }) {
   return <div className="min-h-[100svh] flex items-center justify-center" style={{ background: `radial-gradient(circle at 50% 0%, ${accent}22, #05050A 55%)` }}>{children}</div>;
+}
+
+function MasterPodiumActions({ code, state, nav }) {
+  const [sheet, setSheet] = useState(null); // null | "newgame" | "newroom"
+  const [busy, setBusy] = useState(false);
+
+  const rematch = () => {
+    http.post(`/rooms/${code}/rematch`).catch((e) => alert(e?.response?.data?.detail || "Could not start a rematch"));
+  };
+
+  const submitNewGame = async (values) => {
+    setBusy(true);
+    try {
+      await http.post(`/rooms/${code}/reconfigure`, {
+        game_type: values.gameType, topic: values.topic || "General knowledge", difficulty: values.difficulty,
+        num_questions: values.num, time_per_question: values.tpq, language: values.language,
+      });
+      setSheet(null);
+      setBusy(false);
+    } catch (e) {
+      setBusy(false);
+      alert("Could not start a new game. Try again.");
+    }
+  };
+
+  const submitNewRoom = async (values) => {
+    setBusy(true);
+    try {
+      const r = await http.post(`/rooms/${code}/new-room`, {
+        mode: values.mode, game_type: values.gameType,
+        topic: values.topic || "General knowledge", difficulty: values.difficulty,
+        num_questions: values.num, time_per_question: values.tpq, language: values.language,
+      });
+      nav(`/play/${r.data.code}`);
+    } catch (e) {
+      setBusy(false);
+      alert("Could not create a new room. Try again.");
+    }
+  };
+
+  return (
+    <div className="w-full max-w-xs mt-6 space-y-3">
+      <button data-testid="master-rematch-btn" onClick={rematch}
+        className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl font-black uppercase tracking-widest text-black active:scale-95 transition-transform"
+        style={{ background: "linear-gradient(90deg,#7c3aed,#06b6d4)" }}>
+        Rematch
+      </button>
+      <button data-testid="master-newgame-btn" onClick={() => setSheet("newgame")}
+        className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl font-black uppercase tracking-widest bg-white/10 active:scale-95 transition-transform">
+        New Game
+      </button>
+      <button data-testid="master-newroom-btn" onClick={() => setSheet("newroom")}
+        className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl font-black uppercase tracking-widest bg-white/10 active:scale-95 transition-transform">
+        New Room
+      </button>
+
+      {sheet && (
+        <div className="fixed inset-0 z-50 bg-[#05050A] overflow-y-auto p-6" data-testid={`master-sheet-${sheet}`}>
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-black font-heading gradient-text">
+              {sheet === "newgame" ? "New Game · Same Players" : "New Room · Fresh Code"}
+            </h2>
+            <button data-testid="master-sheet-close" onClick={() => setSheet(null)} className="text-white/40 hover:text-white text-2xl leading-none">×</button>
+          </div>
+          {sheet === "newroom" && (
+            <p className="text-white/40 text-xs mb-5">Connected players carry over automatically — no need to rescan.</p>
+          )}
+          <GameSettingsForm
+            initial={{
+              gameType: state.game_type || "quiz",
+              mode: state.mode || "1v1",
+              topic: state.game_type === "quiz" ? state.topic : "",
+              difficulty: state.difficulty || "mixed",
+              num: state.num_questions || 10,
+              tpq: state.time_per_question || 15,
+              language: state.language || "en",
+            }}
+            showMode={sheet === "newroom"}
+            busy={busy}
+            submitLabel={sheet === "newgame" ? "Back to Lobby" : "Create Room"}
+            onSubmit={sheet === "newgame" ? submitNewGame : submitNewRoom}
+          />
+        </div>
+      )}
+    </div>
+  );
 }
