@@ -13,14 +13,19 @@ export function useRoomState(code, role, token) {
 
   const applyState = useCallback((data) => {
     setState(data);
-    if (!followedRef.current && data?.new_room && token) {
+    if (!followedRef.current && data?.new_room) {
+      if (role === "host") {
+        followedRef.current = true;
+        setRedirectTo(data.new_room.code);
+        return;
+      }
       const newToken = data.new_room.tokens?.[token];
       if (newToken) {
         followedRef.current = true;
         setRedirectTo(data.new_room.code);
       }
     }
-  }, [token]);
+  }, [token, role]);
 
   useEffect(() => {
     if (!code) return;
