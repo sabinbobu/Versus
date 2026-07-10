@@ -5,3 +5,8 @@ credentials.json
 *.pem
 *.key
 .credentials
+.gstack/
+__pycache__/
+*.pyc
+node_modules/
+.venv/

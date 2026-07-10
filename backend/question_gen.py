@@ -92,32 +92,77 @@ def _parse_json(text: str):
     return data if isinstance(data, list) else []
 
 
+QUESTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "questions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "correct_index": {"type": "integer"},
+                    "category": {"type": "string"},
+                    "difficulty": {"type": "string", "enum": ["easy", "medium", "hard"]},
+                    "explanation": {"type": "string"},
+                },
+                "required": ["question", "options", "correct_index", "category",
+                             "difficulty", "explanation"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["questions"],
+    "additionalProperties": False,
+}
+
+
 async def _call_llm(topic, difficulty, count, language):
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    key = os.environ.get("EMERGENT_LLM_KEY")
+    import openai
+
+    key = os.environ.get("OPENAI_API_KEY")
+    if not key:
+        raise RuntimeError("OPENAI_API_KEY not set")
+
     lang_name = "Romanian" if language == "ro" else "English"
     diff_line = ("a mix of easy, medium and hard" if difficulty == "mixed"
                  else f"{difficulty} difficulty")
     system = (
-        "You are a trivia question writer. You output ONLY valid JSON, no prose. "
-        "Every question is factually correct and unambiguous."
+        "You are a trivia question writer. Every question is factually correct and unambiguous."
     )
     prompt = (
         f"Generate exactly {count} multiple-choice trivia questions about \"{topic}\" "
         f"in {lang_name}, of {diff_line}.\n"
-        "Return a JSON array. Each element must be an object with EXACTLY these keys:\n"
-        '{"question": string (max 120 chars), "options": array of 4 distinct strings '
-        '(each max 50 chars), "correct_index": integer 0-3, "category": string, '
-        '"difficulty": "easy"|"medium"|"hard", "explanation": string (max 160 chars)}\n'
-        "Rules: exactly 4 options, all distinct, exactly one correct. "
-        "NEVER use lazy distractors like 'All of the above' or 'None of the above'. "
-        "Keep everything strictly in " + lang_name + ". Output only the JSON array."
+        "Each question needs exactly 4 distinct options (max 50 chars each) and exactly "
+        "one correct answer. NEVER use lazy distractors like 'All of the above' or "
+        "'None of the above'. Keep everything strictly in " + lang_name + "."
     )
-    chat = LlmChat(api_key=key, session_id=f"qgen-{random.randint(1, 1_000_000)}",
-                   system_message=system).with_model("openai", "gpt-5.5")
-    resp = await chat.send_message(UserMessage(text=prompt))
-    text = resp if isinstance(resp, str) else str(resp)
-    return _parse_json(text)
+
+    client = openai.AsyncOpenAI(api_key=key)
+    response = await client.chat.completions.create(
+        model="gpt-5.4-mini",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "trivia_questions",
+                "schema": QUESTION_SCHEMA,
+                "strict": True,
+            },
+        },
+    )
+    text = response.choices[0].message.content or ""
+    data = _parse_json(text)
+    if isinstance(data, dict):
+        data = data.get("questions", [])
+    return data
 
 
 async def generate_questions(topic, difficulty, num, language, exclude_hashes=None):
