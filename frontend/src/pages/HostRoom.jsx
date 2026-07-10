@@ -6,7 +6,8 @@ import confetti from "canvas-confetti";
 import { http } from "../lib/api";
 import { useRoomState, useTick } from "../lib/useRoomState";
 import { ShapeIcon, ANSWERS } from "../components/Shapes";
-import { Play, Pause, SkipForward, Loader2, Trophy, Zap, Crown, Users, Brain, Star, BookOpen, X } from "lucide-react";
+import GameSettingsForm from "../components/GameSettingsForm";
+import { Play, Pause, SkipForward, Loader2, Trophy, Zap, Crown, Users, Brain, Star, BookOpen, X, Sparkles } from "lucide-react";
 
 const SIDE_COLOR = { A: "#06B6D4", B: "#EC4899" };
 
@@ -23,7 +24,11 @@ function useCountdown(state) {
 export default function HostRoom() {
   const { code } = useParams();
   const nav = useNavigate();
-  const { state } = useRoomState(code, "host", null);
+  const { state, redirectTo } = useRoomState(code, "host", null);
+
+  useEffect(() => {
+    if (redirectTo) nav(`/host/${redirectTo}`);
+  }, [redirectTo, nav]);
 
   const cmd = (path) => http.post(`/rooms/${code}/${path}`).catch((e) => {
     if (e?.response?.data?.detail) alert(e.response.data.detail);
@@ -423,6 +428,7 @@ function Podium({ state, code, cmd, nav }) {
   const winnerLabel = winner === "tie" ? "It's a tie!" : `${SideName(state, winner)} wins!`;
   const players = podium.players || [];
   const [showNew, setShowNew] = useState(false);
+  const [showNewRoom, setShowNewRoom] = useState(false);
 
   return (
     <div className="min-h-screen flex flex-col items-center p-10 overflow-y-auto no-scrollbar">
@@ -463,6 +469,10 @@ function Podium({ state, code, cmd, nav }) {
           className="flex items-center gap-2 bg-white/10 hover:bg-white/20 font-black uppercase tracking-widest rounded-full px-8 py-4 transition-colors">
           <Users /> New Game
         </button>
+        <button data-testid="new-room-btn" onClick={() => setShowNewRoom(true)}
+          className="flex items-center gap-2 bg-white/10 hover:bg-white/20 font-black uppercase tracking-widest rounded-full px-8 py-4 transition-colors">
+          <Sparkles /> New Room
+        </button>
         <button data-testid="exit-btn" onClick={() => nav("/setup")}
           className="flex items-center gap-2 text-white/40 hover:text-white/70 font-bold uppercase tracking-widest rounded-full px-6 py-4 transition-colors">
           Fresh Room
@@ -473,33 +483,20 @@ function Podium({ state, code, cmd, nav }) {
       </p>
 
       {showNew && <NewGameOverlay state={state} code={code} onClose={() => setShowNew(false)} />}
+      {showNewRoom && <NewRoomOverlay state={state} code={code} nav={nav} onClose={() => setShowNewRoom(false)} />}
     </div>
   );
 }
 
 function NewGameOverlay({ state, code, onClose }) {
-  const [gameType, setGameType] = useState(state.game_type || "quiz");
-  const [topic, setTopic] = useState(state.game_type === "quiz" ? state.topic : "");
-  const [difficulty, setDifficulty] = useState(state.difficulty || "mixed");
-  const [num, setNum] = useState(state.num_questions || 10);
-  const [tpq, setTpq] = useState(state.time_per_question || 15);
-  const [language, setLanguage] = useState(state.language || "en");
   const [busy, setBusy] = useState(false);
-  const isQuiz = gameType === "quiz";
-  const isMemory = gameType === "memory";
 
-  const TYPES = [
-    { id: "quiz", label: "Quiz", Icon: BookOpen },
-    { id: "reaction", label: "Reaction", Icon: Zap },
-    { id: "memory", label: "Memory", Icon: Brain },
-  ];
-
-  const submit = async () => {
+  const submit = async (values) => {
     setBusy(true);
     try {
       await http.post(`/rooms/${code}/reconfigure`, {
-        game_type: gameType, topic: topic || "General knowledge", difficulty,
-        num_questions: num, time_per_question: tpq, language,
+        game_type: values.gameType, topic: values.topic || "General knowledge", difficulty: values.difficulty,
+        num_questions: values.num, time_per_question: values.tpq, language: values.language,
       });
       onClose();
     } catch (e) {
@@ -508,13 +505,6 @@ function NewGameOverlay({ state, code, onClose }) {
     }
   };
 
-  const P = ({ active, onClick, children, testid }) => (
-    <button data-testid={testid} onClick={onClick}
-      className={`px-4 py-2 rounded-xl font-bold border transition-all ${active ? "bg-gradient-to-r from-violet-600 to-cyan-400 text-black border-transparent" : "bg-white/5 border-white/10 text-white/70"}`}>
-      {children}
-    </button>
-  );
-
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xl flex items-center justify-center p-6" data-testid="newgame-overlay">
       <div className="bg-[#0A0A14] border border-white/10 rounded-3xl p-8 w-full max-w-lg max-h-[90vh] overflow-y-auto no-scrollbar">
@@ -522,71 +512,66 @@ function NewGameOverlay({ state, code, onClose }) {
           <h2 className="text-2xl font-black font-heading gradient-text">New Game · Same Players</h2>
           <button data-testid="newgame-close" onClick={onClose} className="text-white/40 hover:text-white"><X /></button>
         </div>
+        <GameSettingsForm
+          initial={{
+            gameType: state.game_type || "quiz",
+            topic: state.game_type === "quiz" ? state.topic : "",
+            difficulty: state.difficulty || "mixed",
+            num: state.num_questions || 10,
+            tpq: state.time_per_question || 15,
+            language: state.language || "en",
+          }}
+          showMode={false}
+          busy={busy}
+          submitLabel="Back to Lobby"
+          onSubmit={submit}
+        />
+      </div>
+    </div>
+  );
+}
 
-        <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-2">Game Type</label>
-        <div className="grid grid-cols-3 gap-2 mb-5">
-          {TYPES.map((t) => {
-            const Icon = t.Icon;
-            const active = gameType === t.id;
-            return (
-              <button key={t.id} data-testid={`newgame-type-${t.id}`} onClick={() => setGameType(t.id)}
-                className={`flex flex-col items-center gap-1 py-4 rounded-2xl border transition-all ${active ? "border-cyan-400 bg-cyan-400/10" : "border-white/10 bg-white/5"}`}>
-                <Icon size={22} className={active ? "text-cyan-400" : "text-white/60"} />
-                <span className="text-sm font-bold">{t.label}</span>
-              </button>
-            );
-          })}
+function NewRoomOverlay({ state, code, nav, onClose }) {
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (values) => {
+    setBusy(true);
+    try {
+      const r = await http.post(`/rooms/${code}/new-room`, {
+        mode: values.mode, game_type: values.gameType,
+        topic: values.topic || "General knowledge", difficulty: values.difficulty,
+        num_questions: values.num, time_per_question: values.tpq, language: values.language,
+      });
+      nav(`/host/${r.data.code}`);
+    } catch (e) {
+      setBusy(false);
+      alert("Could not create a new room. Try again.");
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xl flex items-center justify-center p-6" data-testid="newroom-overlay">
+      <div className="bg-[#0A0A14] border border-white/10 rounded-3xl p-8 w-full max-w-lg max-h-[90vh] overflow-y-auto no-scrollbar">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-2xl font-black font-heading gradient-text">New Room · Fresh Code</h2>
+          <button data-testid="newroom-close" onClick={onClose} className="text-white/40 hover:text-white"><X /></button>
         </div>
-
-        {isQuiz && (
-          <div className="mb-5">
-            <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-2">Topic</label>
-            <input data-testid="newgame-topic" value={topic} onChange={(e) => setTopic(e.target.value)}
-              placeholder="e.g. movie soundtracks" className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none focus:border-cyan-400" />
-          </div>
-        )}
-
-        {(isQuiz || isMemory) && (
-          <div className="mb-5">
-            <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-2">Difficulty</label>
-            <div className="flex flex-wrap gap-2">
-              {["easy", "medium", "hard", "mixed"].map((d) => (
-                <P key={d} testid={`newgame-diff-${d}`} active={difficulty === d} onClick={() => setDifficulty(d)}>{d[0].toUpperCase() + d.slice(1)}</P>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="mb-5">
-          <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-2">{isQuiz ? "Questions" : "Rounds"}</label>
-          <div className="flex gap-2">
-            {[5, 10, 15].map((n) => <P key={n} testid={`newgame-num-${n}`} active={num === n} onClick={() => setNum(n)}>{n}</P>)}
-          </div>
-        </div>
-
-        {!isMemory && (
-          <div className="mb-6">
-            <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-2">Time per {isQuiz ? "question" : "round"}</label>
-            <div className="flex gap-2">
-              {[10, 15, 20, 30].map((t) => <P key={t} testid={`newgame-tpq-${t}`} active={tpq === t} onClick={() => setTpq(t)}>{t}s</P>)}
-            </div>
-          </div>
-        )}
-
-        {isQuiz && (
-          <div className="mb-6">
-            <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-2">Language</label>
-            <div className="flex gap-2">
-              <P testid="newgame-lang-en" active={language === "en"} onClick={() => setLanguage("en")}>English</P>
-              <P testid="newgame-lang-ro" active={language === "ro"} onClick={() => setLanguage("ro")}>Română</P>
-            </div>
-          </div>
-        )}
-
-        <button data-testid="newgame-confirm" disabled={busy} onClick={submit}
-          className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-600 to-cyan-400 text-black font-black uppercase tracking-widest rounded-2xl py-4 hover:scale-[1.01] active:scale-95 transition-transform disabled:opacity-60">
-          {busy ? <Loader2 className="animate-spin" /> : <Play />} Back to Lobby
-        </button>
+        <p className="text-white/40 text-xs mb-5">Connected players carry over automatically — no need to rescan.</p>
+        <GameSettingsForm
+          initial={{
+            gameType: state.game_type || "quiz",
+            mode: state.mode || "1v1",
+            topic: state.game_type === "quiz" ? state.topic : "",
+            difficulty: state.difficulty || "mixed",
+            num: state.num_questions || 10,
+            tpq: state.time_per_question || 15,
+            language: state.language || "en",
+          }}
+          showMode={true}
+          busy={busy}
+          submitLabel="Create Room"
+          onSubmit={submit}
+        />
       </div>
     </div>
   );
