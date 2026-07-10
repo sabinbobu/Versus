@@ -6,6 +6,7 @@ import confetti from "canvas-confetti";
 import { http } from "../lib/api";
 import { useRoomState, useTick } from "../lib/useRoomState";
 import { ShapeIcon, ANSWERS } from "../components/Shapes";
+import { playSound } from "../lib/sounds";
 import GameSettingsForm from "../components/GameSettingsForm";
 import { Play, Pause, SkipForward, Loader2, Trophy, Zap, Crown, Users, Brain, Star, BookOpen, X, Sparkles } from "lucide-react";
 
@@ -150,6 +151,20 @@ function Preview({ state }) {
 
 function TimerFooter({ state }) {
   const { sec, frac } = useCountdown(state);
+  const questionNumber = state.question?.number;
+  const tickedRef = useRef(null);
+
+  useEffect(() => {
+    const inTimedPhase = state.phase === "active" || state.phase === "sudden_death";
+    if (inTimedPhase && sec === 3 && tickedRef.current !== questionNumber) {
+      tickedRef.current = questionNumber;
+      playSound("tick");
+    }
+    if (!inTimedPhase) {
+      tickedRef.current = null;
+    }
+  }, [sec, state.phase, questionNumber]);
+
   return (
     <>
       <div className="w-full h-5 rounded-full bg-white/10 overflow-hidden">
@@ -177,6 +192,23 @@ function ActiveHeader({ state }) {
 
 function Active({ state, cmd }) {
   const qtype = state.question?.type || state.game_type || "quiz";
+  const answeredCount = state.answered_ids?.length || 0;
+  const questionNumber = state.question?.number;
+  const prevCountRef = useRef(0);
+  const prevQuestionRef = useRef(null);
+
+  useEffect(() => {
+    if (prevQuestionRef.current !== questionNumber) {
+      prevQuestionRef.current = questionNumber;
+      prevCountRef.current = 0;
+    }
+    if (answeredCount > prevCountRef.current) {
+      if (prevCountRef.current === 0 && answeredCount >= 1) playSound("answer1");
+      else if (prevCountRef.current === 1 && answeredCount >= 2) playSound("answer2");
+      prevCountRef.current = answeredCount;
+    }
+  }, [answeredCount, questionNumber]);
+
   if (qtype === "reaction") return <ReactionActive state={state} cmd={cmd} />;
   if (qtype === "memory") return <MemoryActive state={state} cmd={cmd} />;
   return <QuizActive state={state} cmd={cmd} />;
