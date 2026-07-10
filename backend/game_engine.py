@@ -56,6 +56,7 @@ class Room:
             "A": {"name": None, "players": {}},
             "B": {"name": None, "players": {}},
         }
+        self.master_token = None  # first player to join the room; can start from phone
 
         self.current_index = -1
         self.phase_ends_at = 0
@@ -191,6 +192,7 @@ class Room:
                 "name": p["name"],
                 "connected": p["connected"],
                 "is_captain": p["is_captain"],
+                "is_master": p.get("is_master", False),
                 "total": self.player_total(token),
             })
         players.sort(key=lambda x: -x["total"])
@@ -224,6 +226,9 @@ class Room:
             "remaining_ms": self.remaining_ms,
             "paused": self.paused,
             "empty_side": self.empty_side,
+            "can_start": (len(self.sides["A"]["players"]) >= 1
+                          and len(self.sides["B"]["players"]) >= 1
+                          and self.questions_ready),
             "sides": {s: self._side_payload(s) for s in ("A", "B")},
         }
 
@@ -479,6 +484,7 @@ class Engine:
         if room.status != "lobby":
             return None, "in_progress"
         side = side if side in ("A", "B") else "A"
+        first_ever = len(room.all_players()) == 0
         is_captain = len(room.sides[side]["players"]) == 0
         new_token = uuid.uuid4().hex
         uname = room.unique_name(side, name)
@@ -488,8 +494,11 @@ class Engine:
             "name": uname,
             "connected": True,
             "is_captain": is_captain,
+            "is_master": first_ever,
         }
         room.sides[side]["players"][new_token] = player
+        if first_ever:
+            room.master_token = new_token
         if room.mode == "team" and is_captain and team_name:
             room.sides[side]["name"] = team_name.strip()[:20]
         return player, side
@@ -589,6 +598,38 @@ class Engine:
     async def rematch(self, room):
         if room.task and not room.task.done():
             room.task.cancel()
+        room.status = "lobby"
+        room.phase = "lobby"
+        room.current_index = -1
+        room.answers = {}
+        room.q_points = {}
+        room.scored_indices = set()
+        room.streaks = {}
+        room.best_streak = {}
+        room.resp_time = {}
+        room.questions = []
+        room.questions_ready = False
+        room.winner = None
+        room.tiebreaker = None
+        room.sudden_death_winner = None
+        room.empty_side = None
+        room.paused = False
+        room.reaction_live = False
+        room.reaction_lit_at = 0
+        room.gen_task = asyncio.create_task(self._generate(room, exclude=room.served_hashes))
+        await self.broadcast(room)
+
+    async def reconfigure(self, room, *, game_type, topic, difficulty,
+                          num_questions, time_per_question, language):
+        """New game in the SAME room: keep players/master, apply new settings."""
+        if room.task and not room.task.done():
+            room.task.cancel()
+        room.game_type = game_type
+        room.topic = topic
+        room.difficulty = difficulty
+        room.num_questions = num_questions
+        room.time_per_question = time_per_question
+        room.language = language
         room.status = "lobby"
         room.phase = "lobby"
         room.current_index = -1

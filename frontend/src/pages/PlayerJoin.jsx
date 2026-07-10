@@ -10,7 +10,9 @@ export default function PlayerJoin() {
   const nav = useNavigate();
   const [room, setRoom] = useState(null);
   const [side, setSide] = useState(sideParam || null);
-  const [name, setName] = useState("");
+  const [name, setName] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("versus_profile") || "{}").name || ""; } catch { return ""; }
+  });
   const [teamName, setTeamName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -45,7 +47,8 @@ export default function PlayerJoin() {
         side, name: name.trim(),
         team_name: willBeCaptain ? teamName.trim() : undefined,
       });
-      savePlayer(code, { token: r.data.token, id: r.data.id, side: r.data.side, name: r.data.name });
+      localStorage.setItem("versus_profile", JSON.stringify({ name: r.data.name }));
+      savePlayer(code, { token: r.data.token, id: r.data.id, side: r.data.side, name: r.data.name, is_master: r.data.is_master });
       nav(`/play/${code}`);
     } catch (e) {
       setBusy(false);

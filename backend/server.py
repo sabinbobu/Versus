@@ -71,6 +71,15 @@ class MemoryResult(BaseModel):
     mistakes: int = 0
 
 
+class Reconfigure(BaseModel):
+    game_type: str = "quiz"
+    topic: str = "General knowledge"
+    difficulty: str = "mixed"
+    num_questions: int = 10
+    time_per_question: int = 15
+    language: str = "en"
+
+
 @api.get("/")
 async def root():
     return {"app": "Versus", "status": "ok"}
@@ -123,6 +132,7 @@ async def join_room(code: str, body: JoinRoom):
         "name": player["name"],
         "side": side,
         "is_captain": player["is_captain"],
+        "is_master": player.get("is_master", False),
     }
 
 
@@ -190,6 +200,21 @@ async def rematch(code: str):
     if not room:
         raise HTTPException(404, "Room not found")
     await engine.rematch(room)
+    return {"ok": True}
+
+
+@api.post("/rooms/{code}/reconfigure")
+async def reconfigure(code: str, body: Reconfigure):
+    room = engine.get(code)
+    if not room:
+        raise HTTPException(404, "Room not found")
+    gtype = body.game_type if body.game_type in ("quiz", "reaction", "memory") else "quiz"
+    num = body.num_questions if body.num_questions in (5, 10, 15) else 10
+    tpq = body.time_per_question if body.time_per_question in (10, 15, 20, 30) else 15
+    lang = body.language if body.language in ("en", "ro") else "en"
+    diff = body.difficulty if body.difficulty in ("easy", "medium", "hard", "mixed") else "mixed"
+    await engine.reconfigure(room, game_type=gtype, topic=(body.topic or "General knowledge").strip()[:80],
+                             difficulty=diff, num_questions=num, time_per_question=tpq, language=lang)
     return {"ok": True}
 
 

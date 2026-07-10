@@ -39,6 +39,11 @@ export default function PlayerRoom() {
 
   const locked = useMemo(() => state?.answered_ids?.includes(myId), [state, myId]);
   const myResult = state?.results?.[myId];
+  const myPlayer = useMemo(() => (state ? allPlayersSorted(state).find((p) => p.id === myId) : null), [state, myId]);
+  const isMaster = myPlayer?.is_master ?? me?.is_master ?? false;
+  const startGame = useCallback(() => {
+    http.post(`/rooms/${code}/start`).catch((e) => alert(e?.response?.data?.detail || "Cannot start yet"));
+  }, [code]);
   const rank = useMemo(() => {
     if (!state) return null;
     const list = allPlayersSorted(state);
@@ -71,7 +76,21 @@ export default function PlayerRoom() {
           <Center>
             <div className="text-6xl mb-4"><Check size={64} color={accent} /></div>
             <h2 className="text-3xl font-black font-heading mb-2">You're in!</h2>
-            <p className="text-white/50">Watch the big screen. Waiting for the game to start…</p>
+            {isMaster ? (
+              <>
+                <p className="text-white/50 mb-6">You're the <span className="text-yellow-400 font-bold">Master</span> — start when everyone's ready.</p>
+                <button data-testid="player-start-btn" disabled={!state.can_start} onClick={startGame}
+                  className="flex items-center justify-center gap-2 w-full max-w-xs py-5 rounded-2xl font-black uppercase tracking-widest text-black active:scale-95 transition-transform disabled:opacity-50"
+                  style={{ background: state.can_start ? "linear-gradient(90deg,#7c3aed,#06b6d4)" : "#333" }}>
+                  {state.questions_ready ? "Start Game" : "Preparing…"}
+                </button>
+                {!state.can_start && state.questions_ready && (
+                  <p className="text-white/40 text-sm mt-3">Waiting for at least 1 player on each side…</p>
+                )}
+              </>
+            ) : (
+              <p className="text-white/50">Watch the big screen. Waiting for the Master to start…</p>
+            )}
           </Center>
         )}
 
