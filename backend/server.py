@@ -88,6 +88,7 @@ class NewRoom(BaseModel):
     num_questions: int = 10
     time_per_question: int = 15
     language: str = "en"
+    token: str | None = None
 
 
 @api.get("/")
@@ -243,7 +244,8 @@ async def new_room(code: str, body: NewRoom):
         old_room, mode=mode, game_type=gtype,
         topic=(body.topic or "General knowledge").strip()[:80],
         difficulty=diff, num_questions=num, time_per_question=tpq, language=lang)
-    return {"code": new_room_obj.code}
+    caller_new_token = old_room.new_room_tokens.get(body.token) if body.token else None
+    return {"code": new_room_obj.code, "token": caller_new_token}
 
 
 @app.websocket("/api/ws/{code}")

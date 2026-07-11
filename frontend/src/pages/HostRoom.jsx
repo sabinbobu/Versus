@@ -8,7 +8,7 @@ import { useRoomState, useTick } from "../lib/useRoomState";
 import { ShapeIcon, ANSWERS } from "../components/Shapes";
 import { playSound } from "../lib/sounds";
 import GameSettingsForm from "../components/GameSettingsForm";
-import { Play, Pause, SkipForward, Loader2, Trophy, Zap, Crown, Users, Brain, Star, BookOpen, X, Sparkles } from "lucide-react";
+import { Play, Pause, SkipForward, Loader2, Trophy, Zap, Crown, Users, Brain, Star, X, Sparkles } from "lucide-react";
 
 const SIDE_COLOR = { A: "#06B6D4", B: "#EC4899" };
 

@@ -237,7 +237,7 @@ export default function PlayerRoom() {
             </h2>
             {rank && <p className="text-white/60 text-xl">You finished #{rank}</p>}
             {isMaster ? (
-              <MasterPodiumActions code={code} state={state} nav={nav} />
+              <MasterPodiumActions code={code} state={state} nav={nav} me={me} />
             ) : (
               <p className="text-white/40 mt-4 text-sm">Watch the big screen for the podium.</p>
             )}
@@ -255,7 +255,7 @@ function Wrap({ children, accent }) {
   return <div className="min-h-[100svh] flex items-center justify-center" style={{ background: `radial-gradient(circle at 50% 0%, ${accent}22, #05050A 55%)` }}>{children}</div>;
 }
 
-function MasterPodiumActions({ code, state, nav }) {
+function MasterPodiumActions({ code, state, nav, me }) {
   const [sheet, setSheet] = useState(null); // null | "newgame" | "newroom"
   const [busy, setBusy] = useState(false);
 
@@ -285,7 +285,11 @@ function MasterPodiumActions({ code, state, nav }) {
         mode: values.mode, game_type: values.gameType,
         topic: values.topic || "General knowledge", difficulty: values.difficulty,
         num_questions: values.num, time_per_question: values.tpq, language: values.language,
+        token: me?.token,
       });
+      if (r.data.token && me) {
+        savePlayer(r.data.code, { token: r.data.token, id: me.id, side: me.side, name: me.name, is_master: me.is_master });
+      }
       nav(`/play/${r.data.code}`);
     } catch (e) {
       setBusy(false);

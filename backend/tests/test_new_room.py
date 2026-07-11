@@ -158,3 +158,41 @@ class TestNewRoom:
     def test_new_room_missing_old_room_404(self, s):
         r = s.post(f"{API}/rooms/ZZZZZ/new-room", json=_new_room_body(), timeout=10)
         assert r.status_code == 404
+
+    def test_new_room_echoes_callers_new_token(self, s):
+        """When the caller passes their own token, the response returns that
+        caller's freshly-minted token for the new room, so the master's phone
+        can savePlayer() before navigating (no rescan for the master itself)."""
+        code = _create(s)
+        _wait_ready(s, code)
+        a = _join(s, code, "A", "MasterA")
+        _join(s, code, "B", "PlayerB")
+
+        body = _new_room_body()
+        body["token"] = a["token"]
+        r = s.post(f"{API}/rooms/{code}/new-room", json=body, timeout=15)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        new_code = data["code"]
+
+        # The echoed token matches this caller's entry in the old room's token map.
+        old_st = _state(s, code)
+        assert data["token"] == old_st["new_room"]["tokens"][a["token"]]
+        assert data["token"] != a["token"]
+
+        # And it is a real, usable player in the new room on the same side.
+        _wait_ready(s, new_code)
+        new_st = _state(s, new_code)
+        masters = [p for p in new_st["sides"]["A"]["players"] if p.get("is_master")]
+        assert len(masters) == 1 and masters[0]["name"] == "MasterA"
+
+    def test_new_room_token_null_when_no_caller_token(self, s):
+        """No caller token supplied -> response 'token' is null (host big-screen
+        path, which uses no localStorage, relies on this being absent/null)."""
+        code = _create(s)
+        _wait_ready(s, code)
+        _join(s, code, "A", "MasterA")
+
+        r = s.post(f"{API}/rooms/{code}/new-room", json=_new_room_body(), timeout=15)
+        assert r.status_code == 200, r.text
+        assert r.json()["token"] is None
