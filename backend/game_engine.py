@@ -33,7 +33,7 @@ class Room:
                  time_per_question, language, game_type="quiz"):
         self.code = code
         self.mode = mode  # "1v1" | "team"
-        self.game_type = game_type  # "quiz" | "reaction" | "memory"
+        self.game_type = game_type  # "quiz" | "reaction" | "memory" | "tap" | "sequence" | "grid"
         self.topic = topic
         self.difficulty = difficulty
         self.num_questions = num_questions
@@ -49,7 +49,13 @@ class Room:
         # reaction-mode transient state
         self.reaction_live = False
         self.reaction_lit_at = 0
+        self.decoy_live = False
+        self.decoy_index = -1
         self.phase_total_ms = 0
+
+        # tap-mode transient state, and cross-type live progress (memory/sequence/grid)
+        self.tap_counts = {}    # qi -> {token: int}
+        self.progress = {}      # qi -> {token: int}
 
         # sides -> {name, players: {token: player}}
         self.sides = {
@@ -142,6 +148,15 @@ class Room:
         T = self.time_per_question
         ans = self.answers.get(qi, {})
         self.q_points.setdefault(qi, {})
+
+        tap_side_totals = None
+        if gt == "tap":
+            counts = self.tap_counts.get(qi, {})
+            tap_side_totals = {
+                s: sum(counts.get(t, 0) for t in self.side_members(s))
+                for s in ("A", "B")
+            }
+
         for token in self.all_players().keys():
             a = ans.get(token)
             correct = False
@@ -162,11 +177,42 @@ class Room:
                     t = min(max(a["time_ms"] / 1000.0, 0.0), Td)
                     base = 500 + round(500 * (1 - t / Td))
                     base = max(0, base - a.get("mistakes", 0) * 25)
+            elif gt == "sequence":
+                if a:
+                    reached = max(0, int(a.get("reached", 0)))
+                    correct = reached >= 1
+                    base = min(1000, reached * 100)
+            elif gt == "grid":
+                if not a:
+                    streamed = self.progress.get(qi, {}).get(token)
+                    if streamed:
+                        a = {"choice": -1, "done": True, "hits": streamed, "bombs": 0, "time_ms": 0}
+                        ans[token] = a
+                if a:
+                    hits = max(0, int(a.get("hits", 0)))
+                    bombs = max(0, int(a.get("bombs", 0)))
+                    base = max(0, min(1000, hits * 80 - bombs * 120))
+                    correct = base > 0
+            elif gt == "tap":
+                my_taps = self.tap_counts.get(qi, {}).get(token, 0)
+                side = self.side_of(token)
+                other = "B" if side == "A" else "A"
+                won_side = tap_side_totals[side] > tap_side_totals.get(other, 0)
+                best_player_taps = max([self.tap_counts.get(qi, {}).get(t, 0)
+                                         for t in self.all_players().keys()] or [0])
+                base = round(500 * my_taps / max(1, best_player_taps))
+                if won_side:
+                    base += 300
+                correct = won_side
+                a = {"choice": -1, "taps": my_taps, "time_ms": 0}
+                ans[token] = a
             else:  # quiz
                 if a and a["choice"] == q["correct_index"]:
                     correct = True
                     t = min(max(a["time_ms"] / 1000.0, 0.0), T)
                     base = 500 + round(500 * (1 - t / T))
+            if correct and gt == "quiz" and qi == len(self.questions) - 1:
+                base *= 2
             if correct:
                 self.streaks[token] = self.streaks.get(token, 0) + 1
                 s = self.streaks[token]
@@ -196,6 +242,7 @@ class Room:
                 "is_captain": p["is_captain"],
                 "is_master": p.get("is_master", False),
                 "total": self.player_total(token),
+                "streak": self.streaks.get(token, 0),
             })
         players.sort(key=lambda x: -x["total"])
         return {
@@ -247,6 +294,8 @@ class Room:
             if qtype == "reaction":
                 qobj["question"] = q["question"]
                 qobj["reaction_live"] = self.reaction_live
+                if self.decoy_live and not self.reaction_live:
+                    qobj["decoy"] = self.decoy_index
                 if self.reaction_live or reveal_phase:
                     qobj["target"] = q["correct_index"]
                     qobj["correct_index"] = q["correct_index"]
@@ -255,10 +304,30 @@ class Room:
                 qobj["deck"] = q["deck"]
                 qobj["pairs"] = q["pairs"]
                 qobj["duration_ms"] = q.get("duration_ms", 0)
+            elif qtype == "sequence":
+                qobj["question"] = q["question"]
+                qobj["sequence"] = q["sequence"]
+                qobj["duration_ms"] = q.get("duration_ms", 0)
+            elif qtype == "grid":
+                qobj["question"] = q["question"]
+                qobj["script"] = q["script"]
+                qobj["duration_ms"] = q.get("duration_ms", 0)
+            elif qtype == "tap":
+                qobj["question"] = q["question"]
+                qobj["duration_ms"] = q.get("duration_ms", 0)
+                counts = self.tap_counts.get(qi, {})
+                id_of_tap = {t: p["id"] for t, p in self.all_players().items()}
+                data["tap_counts"] = {id_of_tap[t]: n for t, n in counts.items() if t in id_of_tap}
+                data["tap_totals"] = {
+                    s: sum(counts.get(t, 0) for t in self.side_members(s))
+                    for s in ("A", "B")
+                }
             else:  # quiz
                 if show_q:
                     qobj["question"] = q["question"]
                     qobj["options"] = q["options"]
+                if qi == len(self.questions) - 1:
+                    qobj["double_points"] = True
                 if reveal_phase:
                     qobj["correct_index"] = q["correct_index"]
                     qobj["explanation"] = q["explanation"]
@@ -268,6 +337,9 @@ class Room:
             id_of = {t: p["id"] for t, p in self.all_players().items()}
             data["answered_ids"] = [id_of[t] for t in ans.keys() if t in id_of]
             data["connected_count"] = len(self.connected_players())
+
+            if qtype in ("memory", "sequence", "grid") and self.phase in ("active", "reveal"):
+                data["progress"] = {id_of[t]: n for t, n in self.progress.get(qi, {}).items() if t in id_of}
 
             if reveal_phase:
                 dist = [0, 0, 0, 0]
@@ -284,6 +356,10 @@ class Room:
                             "mistakes": a.get("mistakes"),
                             "false_start": a.get("false_start", False),
                             "done": a.get("done", False),
+                            "taps": a.get("taps"),
+                            "reached": a.get("reached"),
+                            "hits": a.get("hits"),
+                            "bombs": a.get("bombs"),
                         }
                 data["distribution"] = dist
                 data["results"] = results
@@ -357,6 +433,15 @@ class Engine:
             elif room.game_type == "memory":
                 room.questions = self._build_memory(room)
                 room.questions_ready = True
+            elif room.game_type == "sequence":
+                room.questions = self._build_sequence(room)
+                room.questions_ready = True
+            elif room.game_type == "grid":
+                room.questions = self._build_grid(room)
+                room.questions_ready = True
+            elif room.game_type == "tap":
+                room.questions = self._build_tap(room)
+                room.questions_ready = True
             else:
                 qs = await question_gen.generate_questions(
                     room.topic, room.difficulty, room.num_questions,
@@ -373,21 +458,28 @@ class Engine:
     def _build_reaction(self, room):
         rounds = []
         for _ in range(room.num_questions):
-            rounds.append({
+            correct = random.randint(0, 3)
+            delay_ms = random.randint(800, 2800)
+            round_ = {
                 "type": "reaction",
                 "category": "Reaction",
                 "difficulty": "-",
                 "question": "Tap the shape the moment it lights up!",
                 "options": ["", "", "", ""],
-                "correct_index": random.randint(0, 3),
-                "delay_ms": random.randint(800, 2800),
+                "correct_index": correct,
+                "delay_ms": delay_ms,
                 "explanation": "",
                 "hash": uuid.uuid4().hex,
-            })
+            }
+            if random.random() < 0.4:
+                decoy = random.choice([i for i in range(4) if i != correct])
+                round_["decoy_index"] = decoy
+                round_["decoy_delay_ms"] = max(400, delay_ms - random.randint(600, 1400))
+            rounds.append(round_)
         return rounds
 
     def _build_memory(self, room):
-        pairs = {"easy": 4, "medium": 6, "hard": 8, "mixed": 6}.get(room.difficulty, 6)
+        pairs = {"easy": 4, "medium": 6, "hard": 10, "mixed": 6}.get(room.difficulty, 6)
         rounds = []
         for _ in range(room.num_questions):
             faces = list(range(pairs))
@@ -402,7 +494,72 @@ class Engine:
                 "correct_index": -1,
                 "deck": deck,
                 "pairs": pairs,
-                "duration_ms": min(70000, pairs * 7000 + 8000),
+                "duration_ms": min(70000, pairs * 7000 + 8000) + 2000,
+                "explanation": "",
+                "hash": uuid.uuid4().hex,
+            })
+        return rounds
+
+    def _build_sequence(self, room):
+        rounds = []
+        for _ in range(room.num_questions):
+            rounds.append({
+                "type": "sequence",
+                "category": "Sequence",
+                "difficulty": "-",
+                "question": "Repeat the pattern!",
+                "options": ["", "", "", ""],
+                "correct_index": -1,
+                "sequence": [random.randint(0, 3) for _ in range(24)],
+                "duration_ms": 45000,
+                "explanation": "",
+                "hash": uuid.uuid4().hex,
+            })
+        return rounds
+
+    def _build_grid(self, room):
+        rounds = []
+        for _ in range(room.num_questions):
+            script = []
+            t = 500
+            last_cell = -1
+            while t < 18500:
+                cell = random.randint(0, 15)
+                while cell == last_cell:
+                    cell = random.randint(0, 15)
+                last_cell = cell
+                script.append({
+                    "cell": cell,
+                    "at_ms": t,
+                    "ttl_ms": 900,
+                    "bomb": random.random() < 0.15,
+                })
+                t += 700
+            rounds.append({
+                "type": "grid",
+                "category": "Grid Hunt",
+                "difficulty": "-",
+                "question": "Whack the lit cells, dodge the bombs!",
+                "options": ["", "", "", ""],
+                "correct_index": -1,
+                "script": script,
+                "duration_ms": 20000,
+                "explanation": "",
+                "hash": uuid.uuid4().hex,
+            })
+        return rounds
+
+    def _build_tap(self, room):
+        rounds = []
+        for _ in range(room.num_questions):
+            rounds.append({
+                "type": "tap",
+                "category": "Tap Battle",
+                "difficulty": "-",
+                "question": "MASH! Pull the rope to your side!",
+                "options": ["", "", "", ""],
+                "correct_index": -1,
+                "duration_ms": 10000,
                 "explanation": "",
                 "hash": uuid.uuid4().hex,
             })
@@ -601,6 +758,95 @@ class Engine:
         await self.broadcast(room)
         return True
 
+    def _accepting_round_end(self, room, qi):
+        """Grace window for types that self-report at/near round end (tap, grid):
+        accept for the current question even if the active loop already exited,
+        as long as it hasn't been scored yet."""
+        return qi == room.current_index and qi not in room.scored_indices
+
+    async def submit_progress(self, room, token, value):
+        """Generic live-progress channel for memory/sequence/grid (pairs matched,
+        level reached, hits so far) — broadcast so the host can render it live."""
+        qi = room.current_index
+        if not self._accepting_round_end(room, qi):
+            return False
+        p = room.all_players().get(token)
+        if not p:
+            return False
+        q = room.questions[qi] if 0 <= qi < len(room.questions) else None
+        if not q or q.get("type") not in ("memory", "sequence", "grid"):
+            return False
+        current = room.progress.setdefault(qi, {}).get(token, 0)
+        room.progress[qi][token] = max(current, max(0, int(value or 0)))
+        await self.broadcast(room)
+        return True
+
+    async def submit_taps(self, room, token, count):
+        """Batched tap accumulation for Tap Battle. Never broadcasts — the
+        custom _active_tap loop broadcasts running totals on its own cadence
+        to keep WS traffic bounded regardless of tap rate."""
+        qi = room.current_index
+        if not self._accepting_round_end(room, qi):
+            return False
+        p = room.all_players().get(token)
+        if not p:
+            return False
+        q = room.questions[qi] if 0 <= qi < len(room.questions) else None
+        if not q or q.get("type") != "tap":
+            return False
+        n = max(0, min(30, int(count or 0)))
+        side_counts = room.tap_counts.setdefault(qi, {})
+        total_so_far = side_counts.get(token, 0)
+        n = min(n, max(0, 400 - total_so_far))
+        side_counts[token] = total_so_far + n
+        return True
+
+    async def submit_sequence(self, room, token, reached):
+        qi = room.current_index
+        if room.phase not in ("active", "sudden_death"):
+            return False
+        if room.paused or room.remaining_ms <= 0:
+            return False
+        q = room.questions[qi] if 0 <= qi < len(room.questions) else None
+        if not q or q.get("type") != "sequence":
+            return False
+        p = room.all_players().get(token)
+        if not p:
+            return False
+        room.answers.setdefault(qi, {})
+        if token in room.answers[qi]:
+            return False
+        t_ms = max(0, now_ms() - room.active_start_ms)
+        seq_len = len(q.get("sequence", []))
+        room.answers[qi][token] = {
+            "choice": -1, "done": True,
+            "reached": max(0, min(int(reached or 0), seq_len)), "time_ms": t_ms,
+        }
+        await self.broadcast(room)
+        return True
+
+    async def submit_grid(self, room, token, hits, bombs):
+        qi = room.current_index
+        if not self._accepting_round_end(room, qi):
+            return False
+        q = room.questions[qi] if 0 <= qi < len(room.questions) else None
+        if not q or q.get("type") != "grid":
+            return False
+        p = room.all_players().get(token)
+        if not p:
+            return False
+        room.answers.setdefault(qi, {})
+        if token in room.answers[qi]:
+            return False
+        t_ms = max(0, now_ms() - room.active_start_ms)
+        room.answers[qi][token] = {
+            "choice": -1, "done": True,
+            "hits": max(0, int(hits or 0)), "bombs": max(0, int(bombs or 0)),
+            "time_ms": t_ms,
+        }
+        await self.broadcast(room)
+        return True
+
     async def rematch(self, room):
         if room.task and not room.task.done():
             room.task.cancel()
@@ -622,6 +868,10 @@ class Engine:
         room.paused = False
         room.reaction_live = False
         room.reaction_lit_at = 0
+        room.decoy_live = False
+        room.decoy_index = -1
+        room.tap_counts = {}
+        room.progress = {}
         room.gen_task = asyncio.create_task(self._generate(room, exclude=room.served_hashes))
         await self.broadcast(room)
 
@@ -654,6 +904,10 @@ class Engine:
         room.paused = False
         room.reaction_live = False
         room.reaction_lit_at = 0
+        room.decoy_live = False
+        room.decoy_index = -1
+        room.tap_counts = {}
+        room.progress = {}
         room.gen_task = asyncio.create_task(self._generate(room, exclude=room.served_hashes))
         await self.broadcast(room)
 
@@ -707,26 +961,57 @@ class Engine:
         q = room.questions[room.current_index]
         room.reaction_live = False
         room.reaction_lit_at = 0
+        room.decoy_live = False
+        room.decoy_index = -1
         T = room.time_per_question
         room.remaining_ms = int(T * 1000)
         room.phase_total_ms = int(T * 1000)
         room.phase_ends_at = now_ms() + room.remaining_ms
         await self.broadcast(room)
         lit_target = room.active_start_ms + q.get("delay_ms", 1000)
+        decoy_target = None
+        if q.get("decoy_index", -1) >= 0:
+            decoy_target = room.active_start_ms + q.get("decoy_delay_ms", 0)
         while room.remaining_ms > 0:
             await asyncio.sleep(0.1)
             if room.skip_flag:
                 return "skip"
             if room.paused:
                 lit_target += 100
+                if decoy_target is not None:
+                    decoy_target += 100
                 continue
             room.remaining_ms -= 100
+            if decoy_target is not None and not room.decoy_live and not room.reaction_live and now_ms() >= decoy_target:
+                room.decoy_live = True
+                room.decoy_index = q["decoy_index"]
+                await self.broadcast(room)
             if not room.reaction_live and now_ms() >= lit_target:
                 room.reaction_live = True
                 room.reaction_lit_at = now_ms()
+                room.decoy_live = False
                 await self.broadcast(room)
             if room.reaction_live and self._all_answered(room):
                 return "early"
+        return "timeout"
+
+    async def _active_tap(self, room):
+        T = room.questions[room.current_index].get("duration_ms", 10000) / 1000.0
+        room.remaining_ms = int(T * 1000)
+        room.phase_total_ms = int(T * 1000)
+        room.phase_ends_at = now_ms() + room.remaining_ms
+        await self.broadcast(room)
+        tick = 0
+        while room.remaining_ms > 0:
+            await asyncio.sleep(0.1)
+            if room.skip_flag:
+                return "skip"
+            if room.paused:
+                continue
+            room.remaining_ms -= 100
+            tick += 1
+            if tick % 2 == 0:
+                await self.broadcast(room)
         return "timeout"
 
     def _all_answered(self, room):
@@ -750,12 +1035,16 @@ class Engine:
 
                 room.phase = "active"
                 room.reaction_live = False
+                room.decoy_live = False
+                room.decoy_index = -1
                 room.answers.setdefault(room.current_index, {})
                 room.active_start_ms = now_ms()
                 gt = room.questions[room.current_index].get("type", "quiz")
                 if gt == "reaction":
                     res = await self._active_reaction(room)
-                elif gt == "memory":
+                elif gt == "tap":
+                    res = await self._active_tap(room)
+                elif gt in ("memory", "sequence", "grid"):
                     dur = room.questions[room.current_index].get("duration_ms",
                                                                   room.time_per_question * 1000) / 1000.0
                     res = await self._wait(room, dur, allow_early=True)
@@ -764,9 +1053,12 @@ class Engine:
                 if res == "skip":
                     room.skip_flag = False
                     room.answers[room.current_index] = {}
+                    room.tap_counts[room.current_index] = {}
                     continue
 
                 room.remaining_ms = 0
+                if gt in ("tap", "grid"):
+                    await asyncio.sleep(0.4)  # grace window for late self-reported submissions
                 room.score_question(room.current_index)
 
                 room.phase = "reveal"

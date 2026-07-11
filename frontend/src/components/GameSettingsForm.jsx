@@ -1,11 +1,24 @@
 import React, { useState } from "react";
-import { Loader2, Play, BookOpen, Zap, Brain, User, Users } from "lucide-react";
+import { Loader2, Play, BookOpen, Zap, Brain, User, Users, Waypoints, Crosshair, Swords } from "lucide-react";
 
 const TYPES = [
   { id: "quiz", label: "Quiz", Icon: BookOpen },
   { id: "reaction", label: "Reaction", Icon: Zap },
   { id: "memory", label: "Memory", Icon: Brain },
+  { id: "sequence", label: "Sequence", Icon: Waypoints },
+  { id: "grid", label: "Grid Hunt", Icon: Crosshair },
+  { id: "tap", label: "Tap Battle", Icon: Swords },
 ];
+
+// Which settings each game type exposes.
+const CAPS = {
+  quiz: { topic: true, difficulty: true, tpq: true, language: true },
+  reaction: { topic: false, difficulty: false, tpq: true, language: false },
+  memory: { topic: false, difficulty: true, tpq: false, language: false },
+  sequence: { topic: false, difficulty: false, tpq: false, language: false },
+  grid: { topic: false, difficulty: false, tpq: false, language: false },
+  tap: { topic: false, difficulty: false, tpq: false, language: false },
+};
 
 function Pill({ active, onClick, children, testid }) {
   return (
@@ -25,7 +38,7 @@ export default function GameSettingsForm({ initial = {}, showMode = false, busy 
   const [tpq, setTpq] = useState(initial.tpq || 15);
   const [language, setLanguage] = useState(initial.language || "en");
   const isQuiz = gameType === "quiz";
-  const isMemory = gameType === "memory";
+  const caps = CAPS[gameType] || CAPS.quiz;
 
   const submit = () => {
     onSubmit({ gameType, topic, difficulty, num, tpq, language, mode });
@@ -64,7 +77,7 @@ export default function GameSettingsForm({ initial = {}, showMode = false, busy 
         </div>
       )}
 
-      {isQuiz && (
+      {caps.topic && (
         <div className="mb-5">
           <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-2">Topic</label>
           <input data-testid="settingsform-topic" value={topic} onChange={(e) => setTopic(e.target.value)}
@@ -72,7 +85,7 @@ export default function GameSettingsForm({ initial = {}, showMode = false, busy 
         </div>
       )}
 
-      {(isQuiz || isMemory) && (
+      {caps.difficulty && (
         <div className="mb-5">
           <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-2">Difficulty</label>
           <div className="flex flex-wrap gap-2">
@@ -90,7 +103,7 @@ export default function GameSettingsForm({ initial = {}, showMode = false, busy 
         </div>
       </div>
 
-      {!isMemory && (
+      {caps.tpq && (
         <div className="mb-6">
           <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-2">Time per {isQuiz ? "question" : "round"}</label>
           <div className="flex gap-2">
@@ -99,7 +112,7 @@ export default function GameSettingsForm({ initial = {}, showMode = false, busy 
         </div>
       )}
 
-      {isQuiz && (
+      {caps.language && (
         <div className="mb-6">
           <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-2">Language</label>
           <div className="flex gap-2">

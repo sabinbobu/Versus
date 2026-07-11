@@ -12,7 +12,7 @@ Reaction:
 Memory:
 - No LLM: ready immediately
 - deck length == pairs*2, has duration_ms
-- difficulty controls pairs (easy=4, medium=6, hard=8)
+- difficulty controls pairs (easy=4, medium=6, hard=10)
 - POST /rooms/{code}/memory records done, points>0 reduced by mistakes*25
 - Player who never submits scores 0 for that round
 - Game reaches podium
@@ -218,7 +218,7 @@ class TestMemoryCreation:
     @pytest.mark.parametrize("diff,expected_pairs", [
         ("easy", 4),
         ("medium", 6),
-        ("hard", 8),
+        ("hard", 10),
     ])
     def test_memory_deck_size_by_difficulty(self, s, diff, expected_pairs):
         t0 = time.time()
@@ -264,7 +264,7 @@ class TestMemoryFlow:
                     json={"token": pa["token"], "mistakes": 0}, timeout=10)
         assert r2.json()["accepted"] is False
 
-        # Memory active duration is min(70000, pairs*7000+8000) = 36s for 4 pairs.
+        # Memory active duration is min(70000, pairs*7000+8000) + 2000 peek = 38s for 4 pairs.
         # B doesn't submit -> wait for full timeout to reach reveal.
         rv = _wait_phase(s, code, "reveal", timeout=50)
         results = rv.get("results", {})

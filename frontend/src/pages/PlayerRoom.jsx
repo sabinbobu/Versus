@@ -4,8 +4,10 @@ import { loadPlayer, savePlayer, http } from "../lib/api";
 import { useRoomState } from "../lib/useRoomState";
 import { ShapeIcon, ANSWERS } from "../components/Shapes";
 import MemoryBoard from "../components/MemoryBoard";
+import SequenceBoard from "../components/SequenceBoard";
+import GridBoard from "../components/GridBoard";
 import GameSettingsForm from "../components/GameSettingsForm";
-import { Check, Loader2, Trophy, Wifi, WifiOff, Brain } from "lucide-react";
+import { Check, Loader2, Trophy, Wifi, WifiOff, Brain, Waypoints, Crosshair, Swords } from "lucide-react";
 
 const SIDE_COLOR = { A: "#06B6D4", B: "#EC4899" };
 
@@ -20,7 +22,7 @@ export default function PlayerRoom() {
   const { code } = useParams();
   const nav = useNavigate();
   const me = loadPlayer(code);
-  const { state, connected, sendAnswer, redirectTo, newTokenForMe } = useRoomState(code, "player", me?.token);
+  const { state, connected, sendAnswer, sendProgress, sendTaps, sendSequence, sendGrid, redirectTo, newTokenForMe } = useRoomState(code, "player", me?.token);
   const [myChoice, setMyChoice] = useState(null);
 
   useEffect(() => {
@@ -43,6 +45,28 @@ export default function PlayerRoom() {
   const memoryDone = useCallback((mistakes) => {
     http.post(`/rooms/${code}/memory`, { token: me?.token, mistakes }).catch(() => {});
   }, [code, me]);
+  const sequenceDone = useCallback((reached) => sendSequence(reached), [sendSequence]);
+  const gridDone = useCallback((hits, bombs) => sendGrid(hits, bombs), [sendGrid]);
+
+  const tapPendingRef = useRef(0);
+  const [myTapCount, setMyTapCount] = useState(0);
+  useEffect(() => { setMyTapCount(0); tapPendingRef.current = 0; }, [state?.current_index]);
+  const onMash = useCallback(() => {
+    tapPendingRef.current += 1;
+    setMyTapCount((c) => c + 1);
+  }, []);
+  useEffect(() => {
+    const qt = state?.question?.type || state?.game_type;
+    const ph = state?.phase;
+    if (qt !== "tap" || !(ph === "active" || ph === "sudden_death")) return;
+    const flushMs = connected ? 200 : 500;
+    const flush = () => {
+      const n = tapPendingRef.current;
+      if (n > 0) { tapPendingRef.current = 0; sendTaps(n); }
+    };
+    const id = setInterval(flush, flushMs);
+    return () => { clearInterval(id); flush(); };
+  }, [state?.question?.type, state?.game_type, state?.phase, connected, sendTaps]);
 
   const myId = me?.id;
   const mySide = me?.side;
@@ -124,6 +148,9 @@ export default function PlayerRoom() {
           ) : (
             <div className="flex flex-col gap-4 flex-1 justify-center" data-testid="answer-buttons">
               {phase === "sudden_death" && <p className="text-center font-black text-yellow-400 uppercase tracking-widest mb-1">Sudden Death!</p>}
+              {state.question?.double_points && (
+                <p className="text-center font-black text-yellow-400 uppercase tracking-widest mb-1" data-testid="double-points-badge">✨ 2× Points!</p>
+              )}
               {ANSWERS.map((a, i) => (
                 <button key={i} data-testid={`answer-btn-${i}`} onClick={() => tap(i)}
                   className="w-full flex-1 max-h-40 rounded-3xl flex flex-col items-center justify-center gap-1 px-3 active:scale-95 transition-transform shadow-[0_6px_0_rgba(0,0,0,0.5)] active:shadow-none active:translate-y-1"
@@ -156,11 +183,12 @@ export default function PlayerRoom() {
               </p>
               {ANSWERS.map((a, i) => {
                 const isTarget = reactionLive && i === target;
+                const isDecoy = !reactionLive && i === state.question?.decoy;
                 return (
                   <button key={i} data-testid={`reaction-btn-${i}`} onClick={() => tap(i)}
                     className={`w-full flex-1 max-h-40 rounded-3xl flex items-center justify-center transition-all active:scale-95 ${isTarget ? "scale-105 animate-pulse" : ""}`}
                     style={{
-                      background: isTarget ? a.color : "#12121f",
+                      background: isTarget ? a.color : isDecoy ? a.color + "4D" : "#12121f",
                       boxShadow: isTarget ? `0 0 40px ${a.color}` : "inset 0 0 0 1px rgba(255,255,255,0.06)",
                     }}>
                     {isTarget && <ShapeIcon index={i} size={72} />}
@@ -180,9 +208,62 @@ export default function PlayerRoom() {
             </Center>
           ) : (
             <div className="flex-1 flex flex-col justify-center">
-              <MemoryBoard deck={state.question?.deck || []} onComplete={memoryDone} />
+              <MemoryBoard deck={state.question?.deck || []} onComplete={memoryDone} onMatch={sendProgress} />
             </div>
           )
+        )}
+
+        {phase === "active" && qtype === "sequence" && (
+          locked ? (
+            <Center>
+              <Waypoints size={64} className="text-green-400 mb-4" />
+              <h2 className="text-3xl font-black font-heading mb-1" data-testid="sequence-done">Run over!</h2>
+              <p className="text-white/50">Waiting for the round to end…</p>
+            </Center>
+          ) : (
+            <div className="flex-1 flex flex-col justify-center">
+              <SequenceBoard sequence={state.question?.sequence || []} durationMs={state.question?.duration_ms} onLevel={sendProgress} onDone={sequenceDone} />
+            </div>
+          )
+        )}
+
+        {phase === "active" && qtype === "grid" && (
+          locked ? (
+            <Center>
+              <Crosshair size={64} className="text-green-400 mb-4" />
+              <h2 className="text-3xl font-black font-heading mb-1" data-testid="grid-done">Nice hunting!</h2>
+              <p className="text-white/50">Waiting for the round to end…</p>
+            </Center>
+          ) : (
+            <div className="flex-1 flex flex-col justify-center">
+              <GridBoard script={state.question?.script || []} onHit={sendProgress} onComplete={gridDone} />
+            </div>
+          )
+        )}
+
+        {(phase === "active" || phase === "sudden_death") && qtype === "tap" && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-6" data-testid="tap-battle">
+            <p className="text-center font-black uppercase tracking-widest text-white/60">MASH!</p>
+            <div className="w-full max-w-xs h-3 rounded-full bg-white/10 overflow-hidden flex">
+              {(() => {
+                const totals = state.tap_totals || { A: 0, B: 0 };
+                const sum = totals.A + totals.B || 1;
+                const pct = mySide === "A" ? (totals.A / sum) * 100 : (totals.B / sum) * 100;
+                return (
+                  <div className="h-full transition-all duration-150" style={{ width: `${pct}%`, background: accent, marginLeft: mySide === "B" ? "auto" : 0 }} />
+                );
+              })()}
+            </div>
+            <button
+              data-testid="tap-mash-btn"
+              onClick={onMash}
+              className="w-56 h-56 rounded-full flex items-center justify-center active:scale-90 transition-transform shadow-[0_10px_0_rgba(0,0,0,0.5)] active:shadow-none active:translate-y-2"
+              style={{ background: accent }}
+            >
+              <Swords size={72} color="#05050A" strokeWidth={2.5} />
+            </button>
+            <p className="text-2xl font-black font-heading" data-testid="tap-my-count">{myTapCount}</p>
+          </div>
         )}
 
         {(phase === "reveal") && (
@@ -196,6 +277,15 @@ export default function PlayerRoom() {
               } else if (qtype === "memory") {
                 title = good ? "Solved! 🧠" : "Time's up";
                 if (good) sub = `${myResult.mistakes ?? 0} misses`;
+              } else if (qtype === "sequence") {
+                title = `Level ${myResult.reached ?? 0}!`;
+                sub = null;
+              } else if (qtype === "grid") {
+                title = good ? "Nice hunting! 🎯" : "No hits";
+                sub = `${myResult.hits ?? 0} hits · ${myResult.bombs ?? 0} bombs`;
+              } else if (qtype === "tap") {
+                title = good ? "Side wins! 💪" : "Out-mashed";
+                sub = `${myResult.taps ?? 0} taps`;
               } else {
                 title = good ? "Correct!" : "Wrong";
               }

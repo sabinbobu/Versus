@@ -2,16 +2,25 @@ import React, { useEffect, useRef, useState } from "react";
 import { FACES } from "./Faces";
 import { HelpCircle } from "lucide-react";
 
+const PEEK_MS = 2000;
+
 // Flip-and-match memory board played locally on the phone.
 // Calls onComplete(mistakes) once when all pairs are matched.
-export default function MemoryBoard({ deck, disabled, onComplete }) {
+// Calls onMatch(pairsMatched) live as pairs are found (for host-side progress).
+export default function MemoryBoard({ deck, disabled, onComplete, onMatch }) {
   const [flipped, setFlipped] = useState([]); // currently face-up (unmatched)
   const [matched, setMatched] = useState([]); // permanently matched indices
   const [mistakes, setMistakes] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [peeking, setPeeking] = useState(true);
   const doneRef = useRef(false);
   const pairs = deck.length / 2;
   const cols = deck.length <= 8 ? 4 : 4;
+
+  useEffect(() => {
+    const t = setTimeout(() => setPeeking(false), PEEK_MS);
+    return () => clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     if (!doneRef.current && matched.length === deck.length && deck.length > 0) {
@@ -21,7 +30,7 @@ export default function MemoryBoard({ deck, disabled, onComplete }) {
   }, [matched, deck.length, mistakes, onComplete]);
 
   const flip = (i) => {
-    if (disabled || busy) return;
+    if (disabled || busy || peeking) return;
     if (matched.includes(i) || flipped.includes(i)) return;
     if (flipped.length === 0) {
       setFlipped([i]);
@@ -31,16 +40,20 @@ export default function MemoryBoard({ deck, disabled, onComplete }) {
       setFlipped(next);
       if (deck[first] === deck[i]) {
         setTimeout(() => {
-          setMatched((m) => [...m, first, i]);
+          setMatched((m) => {
+            const nextMatched = [...m, first, i];
+            onMatch?.(nextMatched.length / 2);
+            return nextMatched;
+          });
           setFlipped([]);
-        }, 250);
+        }, 120);
       } else {
         setBusy(true);
         setMistakes((m) => m + 1);
         setTimeout(() => {
           setFlipped([]);
           setBusy(false);
-        }, 700);
+        }, 450);
       }
     }
   };
@@ -51,9 +64,12 @@ export default function MemoryBoard({ deck, disabled, onComplete }) {
         <span>Matched {matched.length / 2}/{pairs}</span>
         <span data-testid="memory-mistakes">Misses {mistakes}</span>
       </div>
+      {peeking && (
+        <p className="text-center text-xs uppercase tracking-widest text-yellow-400/80 mb-2 animate-pulse">Memorize!</p>
+      )}
       <div className={`grid gap-2 grid-cols-${cols}`} style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
         {deck.map((faceId, i) => {
-          const isUp = flipped.includes(i) || matched.includes(i);
+          const isUp = peeking || flipped.includes(i) || matched.includes(i);
           const face = FACES[faceId % FACES.length];
           const Icon = face.Icon;
           return (
@@ -61,8 +77,8 @@ export default function MemoryBoard({ deck, disabled, onComplete }) {
               key={i}
               data-testid={`memory-card-${i}`}
               onClick={() => flip(i)}
-              disabled={disabled}
-              className={`aspect-square rounded-xl flex items-center justify-center transition-all duration-200 ${
+              disabled={disabled || peeking}
+              className={`aspect-square rounded-xl flex items-center justify-center transition-all duration-100 ease-out ${
                 isUp ? "scale-100" : "active:scale-95"
               } ${matched.includes(i) ? "opacity-60" : ""}`}
               style={{

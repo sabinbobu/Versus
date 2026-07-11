@@ -96,18 +96,28 @@ export function useRoomState(code, role, token) {
     };
   }, [code, role, token, applyState]);
 
-  const sendAnswer = useCallback((choice) => {
+  const send = useCallback((type, payload, httpPath) => {
     const ws = wsRef.current;
     if (ws && ws.readyState === 1 && token) {
-      ws.send(JSON.stringify({ type: "answer", choice }));
+      ws.send(JSON.stringify({ type, ...payload }));
     } else {
-      http.post(`/rooms/${code}/answer`, { token, choice }).catch(() => {});
+      http.post(`/rooms/${code}/${httpPath}`, { token, ...payload }).catch(() => {});
     }
   }, [code, token]);
 
+  const sendAnswer = useCallback((choice) => send("answer", { choice }, "answer"), [send]);
+  const sendMemory = useCallback((mistakes) => send("memory", { mistakes }, "memory"), [send]);
+  const sendTaps = useCallback((count) => send("taps", { count }, "taps"), [send]);
+  const sendProgress = useCallback((value) => send("progress", { value }, "progress"), [send]);
+  const sendSequence = useCallback((reached) => send("sequence", { reached }, "sequence"), [send]);
+  const sendGrid = useCallback((hits, bombs) => send("grid", { hits, bombs }, "grid"), [send]);
+
   const newTokenForMe = redirectTo && token ? state?.new_room?.tokens?.[token] : null;
 
-  return { state, connected, sendAnswer, redirectTo, newTokenForMe };
+  return {
+    state, connected, sendAnswer, sendMemory, sendTaps, sendProgress, sendSequence, sendGrid,
+    redirectTo, newTokenForMe,
+  };
 }
 
 // Local countdown ticker for smooth timer rendering.

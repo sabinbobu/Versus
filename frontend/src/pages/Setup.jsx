@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { http } from "../lib/api";
-import { Users, User, Sparkles, ArrowLeft, Loader2, BookOpen, Zap, Brain } from "lucide-react";
+import { Users, User, Sparkles, ArrowLeft, Loader2, BookOpen, Zap, Brain, Waypoints, Crosshair, Swords } from "lucide-react";
 
 const TOPICS = ["90s pop music", "World geography", "Champions League history", "Space & astronomy", "Movie villains", "Food & cuisine"];
 
@@ -9,7 +9,20 @@ const GAME_TYPES = [
   { id: "quiz", label: "Quiz", Icon: BookOpen, desc: "AI trivia on any topic" },
   { id: "reaction", label: "Reaction", Icon: Zap, desc: "Tap the shape that lights up" },
   { id: "memory", label: "Memory", Icon: Brain, desc: "Flip & match the pairs" },
+  { id: "sequence", label: "Sequence", Icon: Waypoints, desc: "Repeat the growing pattern" },
+  { id: "grid", label: "Grid Hunt", Icon: Crosshair, desc: "Whack the moles, dodge bombs" },
+  { id: "tap", label: "Tap Battle", Icon: Swords, desc: "Tug of war — mash faster!" },
 ];
+
+// Which settings each game type exposes.
+const CAPS = {
+  quiz: { topic: true, difficulty: true, tpq: true, language: true },
+  reaction: { topic: false, difficulty: false, tpq: true, language: false },
+  memory: { topic: false, difficulty: true, tpq: false, language: false },
+  sequence: { topic: false, difficulty: false, tpq: false, language: false },
+  grid: { topic: false, difficulty: false, tpq: false, language: false },
+  tap: { topic: false, difficulty: false, tpq: false, language: false },
+};
 
 function Pill({ active, onClick, children, testid }) {
   return (
@@ -53,7 +66,7 @@ export default function Setup() {
   };
 
   const isQuiz = gameType === "quiz";
-  const isMemory = gameType === "memory";
+  const caps = CAPS[gameType] || CAPS.quiz;
 
   return (
     <div className="min-h-[100svh] grid-bg px-6 py-10 flex flex-col items-center">
@@ -98,7 +111,7 @@ export default function Setup() {
             </div>
           </div>
 
-          {isQuiz && (
+          {caps.topic && (
             <div>
               <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-3">Topic</label>
               <input data-testid="topic-input" value={topic} onChange={(e) => setTopic(e.target.value)}
@@ -115,10 +128,10 @@ export default function Setup() {
             </div>
           )}
 
-          {(isQuiz || isMemory) && (
+          {caps.difficulty && (
             <div>
               <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-3">
-                Difficulty{isMemory && " (sets grid size)"}
+                Difficulty{gameType === "memory" && " (sets grid size)"}
               </label>
               <div className="flex flex-wrap gap-3">
                 {["easy", "medium", "hard", "mixed"].map((d) => (
@@ -139,7 +152,7 @@ export default function Setup() {
             </div>
           </div>
 
-          {!isMemory && (
+          {caps.tpq && (
             <div>
               <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-3">
                 {isQuiz ? "Time per question" : "Time per round"}
@@ -152,7 +165,7 @@ export default function Setup() {
             </div>
           )}
 
-          {isQuiz && (
+          {caps.language && (
             <div>
               <label className="text-xs uppercase tracking-[0.2em] font-bold text-white/50 block mb-3">Language</label>
               <div className="flex gap-3">

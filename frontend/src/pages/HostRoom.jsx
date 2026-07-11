@@ -6,9 +6,9 @@ import confetti from "canvas-confetti";
 import { http } from "../lib/api";
 import { useRoomState, useTick } from "../lib/useRoomState";
 import { ShapeIcon, ANSWERS } from "../components/Shapes";
-import { playSound } from "../lib/sounds";
+import { playSound, unlockAudio } from "../lib/sounds";
 import GameSettingsForm from "../components/GameSettingsForm";
-import { Play, Pause, SkipForward, Loader2, Trophy, Zap, Crown, Users, Brain, Star, X, Sparkles } from "lucide-react";
+import { Play, Pause, SkipForward, Loader2, Trophy, Zap, Crown, Users, Brain, Star, X, Sparkles, Flame, Swords, Waypoints, Crosshair } from "lucide-react";
 
 const SIDE_COLOR = { A: "#06B6D4", B: "#EC4899" };
 
@@ -31,6 +31,12 @@ export default function HostRoom() {
     if (redirectTo) nav(`/host/${redirectTo}`);
   }, [redirectTo, nav]);
 
+  useEffect(() => {
+    const unlock = () => unlockAudio();
+    document.addEventListener("click", unlock, { once: true });
+    return () => document.removeEventListener("click", unlock);
+  }, []);
+
   const cmd = (path) => http.post(`/rooms/${code}/${path}`).catch((e) => {
     if (e?.response?.data?.detail) alert(e.response.data.detail);
   });
@@ -46,13 +52,22 @@ export default function HostRoom() {
       {state.status === "lobby" && <Lobby state={state} code={code} cmd={cmd} />}
       {phase === "preview" && <Preview state={state} />}
       {(phase === "active" || phase === "sudden_death") && <Active state={state} cmd={cmd} />}
-      {phase === "reveal" && (state.game_type === "memory" ? <MemoryReveal state={state} cmd={cmd} /> : <Reveal state={state} cmd={cmd} />)}
+      {phase === "reveal" && <RevealDispatch state={state} cmd={cmd} />}
       {phase === "leaderboard" && <Leaderboard state={state} cmd={cmd} />}
       {phase === "podium" && <Podium state={state} code={code} cmd={cmd} nav={nav} />}
 
       {state.empty_side && state.status === "playing" && <EmptyOverlay state={state} code={code} />}
     </div>
   );
+}
+
+function RevealDispatch({ state, cmd }) {
+  const qtype = state.question?.type || state.game_type;
+  if (qtype === "memory") return <MemoryReveal state={state} cmd={cmd} />;
+  if (qtype === "reaction") return <ReactionReveal state={state} cmd={cmd} />;
+  if (qtype === "tap") return <TapReveal state={state} cmd={cmd} />;
+  if (qtype === "sequence" || qtype === "grid") return <RoundReveal state={state} cmd={cmd} />;
+  return <Reveal state={state} cmd={cmd} />;
 }
 
 function HostControls({ state, cmd }) {
@@ -139,8 +154,23 @@ function Lobby({ state, code, cmd }) {
 
 function Preview({ state }) {
   const { sec } = useCountdown(state);
+  const questionNumber = state.question?.number;
+  const roundPlayedRef = useRef(null);
+
+  useEffect(() => {
+    if (questionNumber && roundPlayedRef.current !== questionNumber) {
+      roundPlayedRef.current = questionNumber;
+      playSound("round");
+    }
+  }, [questionNumber]);
+
   return (
     <div className="min-h-screen flex flex-col items-center justify-center">
+      {state.question?.double_points && (
+        <div className="flex items-center gap-2 px-6 py-2 rounded-full bg-yellow-400/15 border border-yellow-400/40 text-yellow-300 font-black uppercase tracking-widest mb-6 animate-pulse" data-testid="double-points-banner">
+          <Sparkles size={18} /> Double Points!
+        </div>
+      )}
       <p className="text-2xl uppercase tracking-[0.4em] text-white/40 mb-4">Question {state.question?.number} / {state.total_questions}</p>
       <p className="text-xl font-bold text-cyan-400 mb-10">{state.question?.category}</p>
       <div className="text-[16vw] font-black font-heading gradient-text animate-pop-in" key={sec} data-testid="preview-countdown">{sec}</div>
@@ -203,15 +233,38 @@ function Active({ state, cmd }) {
       prevCountRef.current = 0;
     }
     if (answeredCount > prevCountRef.current) {
-      if (prevCountRef.current === 0 && answeredCount >= 1) playSound("answer1");
-      else if (prevCountRef.current === 1 && answeredCount >= 2) playSound("answer2");
+      const prev = prevCountRef.current;
+      if (prev < 1 && answeredCount >= 1) playSound("answer1");
+      if (prev < 2 && answeredCount >= 2) playSound("answer2");
       prevCountRef.current = answeredCount;
     }
   }, [answeredCount, questionNumber]);
 
   if (qtype === "reaction") return <ReactionActive state={state} cmd={cmd} />;
   if (qtype === "memory") return <MemoryActive state={state} cmd={cmd} />;
+  if (qtype === "sequence") return <SequenceActive state={state} cmd={cmd} />;
+  if (qtype === "grid") return <GridActive state={state} cmd={cmd} />;
+  if (qtype === "tap") return <TapActive state={state} cmd={cmd} />;
   return <QuizActive state={state} cmd={cmd} />;
+}
+
+function StreakStrip({ state }) {
+  const streakers = [];
+  ["A", "B"].forEach((s) => (state.sides[s]?.players || []).forEach((p) => {
+    if ((p.streak || 0) >= 2) streakers.push({ ...p, side: s });
+  }));
+  if (streakers.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-3 justify-center mb-6" data-testid="streak-strip">
+      {streakers.map((p) => (
+        <div key={p.id} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-orange-500/15 border border-orange-400/30">
+          <Flame size={16} className="text-orange-400" />
+          <span className="font-bold text-sm" style={{ color: SIDE_COLOR[p.side] }}>{p.name}</span>
+          <span className="text-orange-300 font-black text-sm">×{p.streak}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function QuizActive({ state, cmd }) {
@@ -220,6 +273,14 @@ function QuizActive({ state, cmd }) {
     <div className="min-h-screen flex flex-col p-10">
       <HostControls state={state} cmd={cmd} />
       <ActiveHeader state={state} />
+      {q.double_points && (
+        <div className="flex justify-center mb-4">
+          <div className="flex items-center gap-2 px-5 py-1.5 rounded-full bg-yellow-400/15 border border-yellow-400/40 text-yellow-300 font-black uppercase tracking-widest text-sm animate-pulse" data-testid="double-points-banner">
+            <Sparkles size={16} /> Double Points!
+          </div>
+        </div>
+      )}
+      <StreakStrip state={state} />
       <div className="flex-1 flex items-center justify-center">
         <h2 className="text-[3.5vw] leading-tight text-center max-w-6xl font-black font-heading" data-testid="host-question">{q.question}</h2>
       </div>
@@ -253,10 +314,11 @@ function ReactionActive({ state, cmd }) {
         <div className="grid grid-cols-2 gap-8 w-full max-w-3xl">
           {ANSWERS.map((a, i) => {
             const isTarget = live && i === target;
+            const isDecoy = !live && i === q.decoy;
             return (
               <div key={i} data-testid={`reaction-cell-${i}`}
                 className={`h-40 rounded-3xl flex items-center justify-center transition-all ${isTarget ? "scale-105 animate-pulse" : ""}`}
-                style={{ background: isTarget ? a.color : "#12121f", boxShadow: isTarget ? `0 0 60px ${a.color}` : "inset 0 0 0 1px rgba(255,255,255,0.06)" }}>
+                style={{ background: isTarget ? a.color : isDecoy ? a.color + "4D" : "#12121f", boxShadow: isTarget ? `0 0 60px ${a.color}` : "inset 0 0 0 1px rgba(255,255,255,0.06)" }}>
                 {isTarget && <ShapeIcon index={i} size={64} />}
               </div>
             );
@@ -270,6 +332,8 @@ function ReactionActive({ state, cmd }) {
 
 function MemoryActive({ state, cmd }) {
   const done = new Set(state.answered_ids || []);
+  const progress = state.progress || {};
+  const totalPairs = state.question?.pairs || 1;
   const players = [];
   ["A", "B"].forEach((s) => state.sides[s].players.forEach((p) => players.push({ ...p, side: s })));
   return (
@@ -280,16 +344,112 @@ function MemoryActive({ state, cmd }) {
         <Brain size={72} className="text-violet-400 mb-4" />
         <h2 className="text-[3vw] font-black font-heading mb-10 text-center" data-testid="host-question">Match the pairs on your phone!</h2>
         <div className="grid grid-cols-2 gap-6 w-full max-w-4xl">
+          {players.map((p) => {
+            const solved = done.has(p.id);
+            const matchedPairs = Math.min(totalPairs, progress[p.id] || 0);
+            return (
+              <div key={p.id} className="flex flex-col gap-3 px-6 py-4 rounded-2xl border" data-testid={`memory-player-${p.id}`}
+                style={{ borderColor: SIDE_COLOR[p.side] + "55", background: SIDE_COLOR[p.side] + "11" }}>
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-xl">{p.name}</span>
+                  {solved
+                    ? <span className="font-black text-green-400 uppercase tracking-widest">Solved ✓</span>
+                    : <span className="text-white/40 uppercase tracking-widest text-sm">{matchedPairs}/{totalPairs} pairs</span>}
+                </div>
+                <div className="w-full h-2.5 rounded-full bg-white/10 overflow-hidden">
+                  <div className="h-full rounded-full transition-all duration-300"
+                    style={{ width: `${((solved ? totalPairs : matchedPairs) / totalPairs) * 100}%`, background: SIDE_COLOR[p.side] }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <TimerFooter state={state} />
+    </div>
+  );
+}
+
+function SequenceActive({ state, cmd }) {
+  const done = new Set(state.answered_ids || []);
+  const progress = state.progress || {};
+  const players = [];
+  ["A", "B"].forEach((s) => state.sides[s].players.forEach((p) => players.push({ ...p, side: s })));
+  return (
+    <div className="min-h-screen flex flex-col p-10">
+      <HostControls state={state} cmd={cmd} />
+      <ActiveHeader state={state} />
+      <div className="flex-1 flex flex-col items-center justify-center">
+        <Waypoints size={72} className="text-violet-400 mb-4" />
+        <h2 className="text-[3vw] font-black font-heading mb-10 text-center" data-testid="host-question">Repeat the pattern on your phone!</h2>
+        <div className="grid grid-cols-2 gap-6 w-full max-w-4xl">
           {players.map((p) => (
-            <div key={p.id} className="flex items-center justify-between px-6 py-4 rounded-2xl border" data-testid={`memory-player-${p.id}`}
+            <div key={p.id} className="flex items-center justify-between px-6 py-4 rounded-2xl border" data-testid={`sequence-player-${p.id}`}
               style={{ borderColor: SIDE_COLOR[p.side] + "55", background: SIDE_COLOR[p.side] + "11" }}>
               <span className="font-bold text-xl">{p.name}</span>
               {done.has(p.id)
-                ? <span className="font-black text-green-400 uppercase tracking-widest">Solved ✓</span>
-                : <span className="text-white/40 uppercase tracking-widest animate-pulse">Matching…</span>}
+                ? <span className="font-black text-red-400 uppercase tracking-widest">Out ✗</span>
+                : <span className="text-white/40 uppercase tracking-widest">Level {progress[p.id] || 0}</span>}
             </div>
           ))}
         </div>
+      </div>
+      <TimerFooter state={state} />
+    </div>
+  );
+}
+
+function GridActive({ state, cmd }) {
+  const done = new Set(state.answered_ids || []);
+  const progress = state.progress || {};
+  const players = [];
+  ["A", "B"].forEach((s) => state.sides[s].players.forEach((p) => players.push({ ...p, side: s })));
+  return (
+    <div className="min-h-screen flex flex-col p-10">
+      <HostControls state={state} cmd={cmd} />
+      <ActiveHeader state={state} />
+      <div className="flex-1 flex flex-col items-center justify-center">
+        <Crosshair size={72} className="text-violet-400 mb-4" />
+        <h2 className="text-[3vw] font-black font-heading mb-10 text-center" data-testid="host-question">Whack the lit cells on your phone!</h2>
+        <div className="grid grid-cols-2 gap-6 w-full max-w-4xl">
+          {players.map((p) => (
+            <div key={p.id} className="flex items-center justify-between px-6 py-4 rounded-2xl border" data-testid={`grid-player-${p.id}`}
+              style={{ borderColor: SIDE_COLOR[p.side] + "55", background: SIDE_COLOR[p.side] + "11" }}>
+              <span className="font-bold text-xl">{p.name}</span>
+              {done.has(p.id)
+                ? <span className="font-black text-green-400 uppercase tracking-widest">Done ✓</span>
+                : <span className="text-white/40 uppercase tracking-widest">{progress[p.id] || 0} hits</span>}
+            </div>
+          ))}
+        </div>
+      </div>
+      <TimerFooter state={state} />
+    </div>
+  );
+}
+
+function TapActive({ state, cmd }) {
+  const totals = state.tap_totals || { A: 0, B: 0 };
+  const sum = totals.A + totals.B || 1;
+  const pct = 50 + 50 * (totals.A - totals.B) / sum;
+  return (
+    <div className="min-h-screen flex flex-col p-10">
+      <HostControls state={state} cmd={cmd} />
+      <div className="flex items-center justify-between mb-6">
+        <span className="text-white/40 uppercase tracking-widest font-bold">Tap Battle</span>
+      </div>
+      <div className="flex-1 flex flex-col items-center justify-center gap-10">
+        <Swords size={72} className="text-violet-400 animate-pulse" />
+        <div className="flex items-center gap-8 w-full max-w-3xl">
+          <span className="text-5xl font-black font-heading" style={{ color: SIDE_COLOR.A }} data-testid="tap-total-a">{totals.A}</span>
+          <div className="flex-1 h-8 rounded-full bg-white/10 overflow-hidden relative">
+            <div className="absolute inset-y-0 left-0 transition-all duration-150" style={{ width: `${pct}%`, background: SIDE_COLOR.A }} />
+            <div className="absolute inset-y-0 right-0 transition-all duration-150" style={{ width: `${100 - pct}%`, background: SIDE_COLOR.B }} />
+            <div className="absolute inset-y-0 w-1 bg-white/60" style={{ left: "50%" }} />
+          </div>
+          <span className="text-5xl font-black font-heading" style={{ color: SIDE_COLOR.B }} data-testid="tap-total-b">{totals.B}</span>
+        </div>
+        <p className="text-white/40 uppercase tracking-widest">MASH!</p>
       </div>
       <TimerFooter state={state} />
     </div>
@@ -325,6 +485,144 @@ function MemoryReveal({ state, cmd }) {
                     {r?.done
                       ? <span className="text-green-400 font-bold">{(r.time_ms / 1000).toFixed(1)}s · {r.mistakes} miss · +{r.points}</span>
                       : <span className="text-red-400 font-bold">Time's up · +0</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ReactionReveal({ state, cmd }) {
+  const results = state.results || {};
+  let fastestSide = null;
+  let fastestMs = Infinity;
+  ["A", "B"].forEach((s) => {
+    state.sides[s].players.forEach((p) => {
+      const r = results[p.id];
+      if (r?.correct && r.time_ms < fastestMs) {
+        fastestMs = r.time_ms;
+        fastestSide = s;
+      }
+    });
+  });
+  return (
+    <div className="min-h-screen flex flex-col p-10">
+      <HostControls state={state} cmd={cmd} />
+      <h2 className="text-4xl font-black font-heading text-center gradient-text mb-3 uppercase tracking-widest">Round Results</h2>
+      {state.fastest && (
+        <div className="flex justify-center mb-8">
+          <div className="flex items-center gap-2 px-5 py-2 rounded-full bg-yellow-400/10 border border-yellow-400/30" data-testid="fastest-player">
+            <Zap size={18} className="text-yellow-400" />
+            <span className="font-bold">Fastest: {state.fastest.name} ({state.fastest.time_ms}ms)</span>
+          </div>
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-8 max-w-5xl mx-auto w-full">
+        {["A", "B"].map((s) => (
+          <div key={s} className={fastestSide === s ? "rounded-2xl ring-2 ring-yellow-400/40 p-2 -m-2" : ""}>
+            <h4 className="font-black text-2xl mb-3" style={{ color: SIDE_COLOR[s] }}>{SideName(state, s)}</h4>
+            <div className="space-y-2">
+              {state.sides[s].players.map((p) => {
+                const r = results[p.id];
+                let label;
+                if (!r) label = <span className="text-white/40 font-bold">No tap · +0</span>;
+                else if (r.false_start) label = <span className="text-red-400 font-bold">False start · +0</span>;
+                else if (r.correct) label = <span className="text-green-400 font-bold">{r.time_ms}ms · +{r.points}</span>;
+                else label = <span className="text-red-400 font-bold">Missed · +0</span>;
+                return (
+                  <div key={p.id} className="flex items-center justify-between px-5 py-3 rounded-2xl bg-white/5">
+                    <span className="font-bold">{p.name}</span>
+                    {label}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RoundReveal({ state, cmd }) {
+  const qtype = state.question?.type;
+  const results = state.results || {};
+  return (
+    <div className="min-h-screen flex flex-col p-10">
+      <HostControls state={state} cmd={cmd} />
+      <h2 className="text-4xl font-black font-heading text-center gradient-text mb-3 uppercase tracking-widest">Round Results</h2>
+      {state.fastest && (
+        <div className="flex justify-center mb-8">
+          <div className="flex items-center gap-2 px-5 py-2 rounded-full bg-yellow-400/10 border border-yellow-400/30" data-testid="fastest-player">
+            <Zap size={18} className="text-yellow-400" />
+            <span className="font-bold">Fastest: {state.fastest.name} ({(state.fastest.time_ms / 1000).toFixed(1)}s)</span>
+          </div>
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-8 max-w-5xl mx-auto w-full">
+        {["A", "B"].map((s) => (
+          <div key={s}>
+            <h4 className="font-black text-2xl mb-3" style={{ color: SIDE_COLOR[s] }}>{SideName(state, s)}</h4>
+            <div className="space-y-2">
+              {state.sides[s].players.map((p) => {
+                const r = results[p.id];
+                let label;
+                if (!r) label = <span className="text-red-400 font-bold">No run · +0</span>;
+                else if (qtype === "sequence") label = <span className="text-green-400 font-bold">Level {r.reached ?? 0} · +{r.points}</span>;
+                else label = <span className="text-green-400 font-bold">{r.hits ?? 0} hits · {r.bombs ?? 0} bombs · +{r.points}</span>;
+                return (
+                  <div key={p.id} className="flex items-center justify-between px-5 py-3 rounded-2xl bg-white/5">
+                    <span className="font-bold">{p.name}</span>
+                    {label}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TapReveal({ state, cmd }) {
+  const totals = state.tap_totals || { A: 0, B: 0 };
+  const sum = totals.A + totals.B || 1;
+  const pct = 50 + 50 * (totals.A - totals.B) / sum;
+  const results = state.results || {};
+  const winnerSide = totals.A === totals.B ? null : totals.A > totals.B ? "A" : "B";
+  return (
+    <div className="min-h-screen flex flex-col p-10">
+      <HostControls state={state} cmd={cmd} />
+      <h2 className="text-4xl font-black font-heading text-center gradient-text mb-8 uppercase tracking-widest">Round Results</h2>
+      <div className="flex items-center gap-8 w-full max-w-3xl mx-auto mb-10">
+        <span className="text-5xl font-black font-heading" style={{ color: SIDE_COLOR.A }}>{totals.A}</span>
+        <div className="flex-1 h-8 rounded-full bg-white/10 overflow-hidden relative">
+          <div className="absolute inset-y-0 left-0" style={{ width: `${pct}%`, background: SIDE_COLOR.A }} />
+          <div className="absolute inset-y-0 right-0" style={{ width: `${100 - pct}%`, background: SIDE_COLOR.B }} />
+        </div>
+        <span className="text-5xl font-black font-heading" style={{ color: SIDE_COLOR.B }}>{totals.B}</span>
+      </div>
+      {winnerSide && (
+        <p className="text-center font-black uppercase tracking-widest mb-8" style={{ color: SIDE_COLOR[winnerSide] }}>
+          {SideName(state, winnerSide)} wins the tug of war!
+        </p>
+      )}
+      <div className="grid grid-cols-2 gap-8 max-w-5xl mx-auto w-full">
+        {["A", "B"].map((s) => (
+          <div key={s}>
+            <h4 className="font-black text-2xl mb-3" style={{ color: SIDE_COLOR[s] }}>{SideName(state, s)}</h4>
+            <div className="space-y-2">
+              {state.sides[s].players.map((p) => {
+                const r = results[p.id];
+                return (
+                  <div key={p.id} className="flex items-center justify-between px-5 py-3 rounded-2xl bg-white/5">
+                    <span className="font-bold">{p.name}</span>
+                    <span className="text-green-400 font-bold">{r?.taps ?? 0} taps · +{r?.points ?? 0}</span>
                   </div>
                 );
               })}
@@ -431,7 +729,14 @@ function Leaderboard({ state, cmd }) {
             className="flex items-center gap-4 px-5 py-3 rounded-2xl bg-white/5 border-l-4"
             style={{ borderColor: SIDE_COLOR[p.side] }}>
             <span className="text-2xl font-black w-8 text-white/40">{i + 1}</span>
-            <span className="flex-1 font-bold text-lg">{p.name}</span>
+            <span className="flex-1 font-bold text-lg flex items-center gap-2">
+              {p.name}
+              {(p.streak || 0) >= 2 && (
+                <span className="flex items-center gap-0.5 text-orange-400 text-sm font-black">
+                  <Flame size={14} />×{p.streak}
+                </span>
+              )}
+            </span>
             <span className="text-2xl font-black font-heading">{p.total}</span>
           </motion.div>
         ))}

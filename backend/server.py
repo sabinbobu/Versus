@@ -21,6 +21,8 @@ db = client[os.environ["DB_NAME"]]
 
 engine = Engine(db=db)
 
+VALID_TYPES = ("quiz", "reaction", "memory", "tap", "sequence", "grid")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -71,6 +73,27 @@ class MemoryResult(BaseModel):
     mistakes: int = 0
 
 
+class TapsResult(BaseModel):
+    token: str
+    count: int = 0
+
+
+class SequenceResult(BaseModel):
+    token: str
+    reached: int = 0
+
+
+class GridResult(BaseModel):
+    token: str
+    hits: int = 0
+    bombs: int = 0
+
+
+class ProgressUpdate(BaseModel):
+    token: str
+    value: int = 0
+
+
 class Reconfigure(BaseModel):
     game_type: str = "quiz"
     topic: str = "General knowledge"
@@ -99,7 +122,7 @@ async def root():
 @api.post("/rooms")
 async def create_room(body: CreateRoom):
     mode = body.mode if body.mode in ("1v1", "team") else "1v1"
-    gtype = body.game_type if body.game_type in ("quiz", "reaction", "memory") else "quiz"
+    gtype = body.game_type if body.game_type in VALID_TYPES else "quiz"
     num = body.num_questions if body.num_questions in (5, 10, 15) else 10
     tpq = body.time_per_question if body.time_per_question in (10, 15, 20, 30) else 15
     lang = body.language if body.language in ("en", "ro") else "en"
@@ -205,6 +228,42 @@ async def memory_result(code: str, body: MemoryResult):
     return {"accepted": ok}
 
 
+@api.post("/rooms/{code}/taps")
+async def taps_result(code: str, body: TapsResult):
+    room = engine.get(code)
+    if not room:
+        raise HTTPException(404, "Room not found")
+    ok = await engine.submit_taps(room, body.token, body.count)
+    return {"accepted": ok}
+
+
+@api.post("/rooms/{code}/sequence")
+async def sequence_result(code: str, body: SequenceResult):
+    room = engine.get(code)
+    if not room:
+        raise HTTPException(404, "Room not found")
+    ok = await engine.submit_sequence(room, body.token, body.reached)
+    return {"accepted": ok}
+
+
+@api.post("/rooms/{code}/grid")
+async def grid_result(code: str, body: GridResult):
+    room = engine.get(code)
+    if not room:
+        raise HTTPException(404, "Room not found")
+    ok = await engine.submit_grid(room, body.token, body.hits, body.bombs)
+    return {"accepted": ok}
+
+
+@api.post("/rooms/{code}/progress")
+async def progress_update(code: str, body: ProgressUpdate):
+    room = engine.get(code)
+    if not room:
+        raise HTTPException(404, "Room not found")
+    ok = await engine.submit_progress(room, body.token, body.value)
+    return {"accepted": ok}
+
+
 @api.post("/rooms/{code}/rematch")
 async def rematch(code: str):
     room = engine.get(code)
@@ -219,7 +278,7 @@ async def reconfigure(code: str, body: Reconfigure):
     room = engine.get(code)
     if not room:
         raise HTTPException(404, "Room not found")
-    gtype = body.game_type if body.game_type in ("quiz", "reaction", "memory") else "quiz"
+    gtype = body.game_type if body.game_type in VALID_TYPES else "quiz"
     num = body.num_questions if body.num_questions in (5, 10, 15) else 10
     tpq = body.time_per_question if body.time_per_question in (10, 15, 20, 30) else 15
     lang = body.language if body.language in ("en", "ro") else "en"
@@ -235,7 +294,7 @@ async def new_room(code: str, body: NewRoom):
     if not old_room:
         raise HTTPException(404, "Room not found")
     mode = body.mode if body.mode in ("1v1", "team") else "1v1"
-    gtype = body.game_type if body.game_type in ("quiz", "reaction", "memory") else "quiz"
+    gtype = body.game_type if body.game_type in VALID_TYPES else "quiz"
     num = body.num_questions if body.num_questions in (5, 10, 15) else 10
     tpq = body.time_per_question if body.time_per_question in (10, 15, 20, 30) else 15
     lang = body.language if body.language in ("en", "ro") else "en"
@@ -264,6 +323,14 @@ async def ws_endpoint(ws: WebSocket, code: str, role: str = "player", token: str
                 await engine.submit_answer(room, token, msg.get("choice"))
             elif msg.get("type") == "memory" and token:
                 await engine.submit_memory(room, token, msg.get("mistakes", 0))
+            elif msg.get("type") == "taps" and token:
+                await engine.submit_taps(room, token, msg.get("count", 0))
+            elif msg.get("type") == "sequence" and token:
+                await engine.submit_sequence(room, token, msg.get("reached", 0))
+            elif msg.get("type") == "grid" and token:
+                await engine.submit_grid(room, token, msg.get("hits", 0), msg.get("bombs", 0))
+            elif msg.get("type") == "progress" and token:
+                await engine.submit_progress(room, token, msg.get("value", 0))
     except WebSocketDisconnect:
         await engine.disconnect(room, ws)
     except Exception:
